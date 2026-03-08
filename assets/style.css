@@ -1,0 +1,300 @@
+/* ============================================================
+   App Review Intelligence Lab — 반응형 CSS
+   PC(≥1024px) 기준 설계, 모바일(≤768px) 미디어쿼리 오버라이드
+   ============================================================ */
+
+/* ── 전체 폰트·컬러 변수 ───────────────────────────────────────── */
+:root {
+    --primary: #4F8EF7;
+    --primary-dark: #2563EB;
+    --surface: #F8FAFF;
+    --surface-card: #FFFFFF;
+    --border: #E2E8F0;
+    --text-main: #1E293B;
+    --text-sub: #64748B;
+    --success: #10B981;
+    --warning: #F59E0B;
+    --danger: #EF4444;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 1px 4px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+    --font: 'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+}
+
+/* ── 기본 리셋 & 배경 ──────────────────────────────────────────── */
+html, body, [data-testid="stAppViewContainer"] {
+    font-family: var(--font) !important;
+    background-color: var(--surface) !important;
+    color: var(--text-main) !important;
+}
+
+/* 사이드바 숨김 (풀스크린 단일 페이지) */
+[data-testid="stSidebar"] { display: none !important; }
+
+/* Streamlit 기본 헤더 패딩 제거 */
+[data-testid="stHeader"] { background: transparent !important; }
+
+/* ── 메인 컨테이너 너비 제한 ───────────────────────────────────── */
+.main .block-container {
+    max-width: 1200px !important;
+    padding: 2rem 2rem 4rem !important;
+    margin: 0 auto !important;
+}
+
+/* ── 페이지 타이틀 ─────────────────────────────────────────────── */
+.page-title {
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--primary-dark);
+    letter-spacing: -0.5px;
+    margin-bottom: 0.25rem;
+}
+.page-subtitle {
+    font-size: 1rem;
+    color: var(--text-sub);
+    margin-bottom: 2rem;
+}
+
+/* ── 섹션 카드 ─────────────────────────────────────────────────── */
+.section-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1.25rem;
+    box-shadow: var(--shadow);
+}
+.section-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* ── 앱 검증 카드 ──────────────────────────────────────────────── */
+.app-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    background: var(--surface-card);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    transition: border-color .2s;
+}
+.app-card.confirmed {
+    border-color: var(--success);
+    background: #F0FDF4;
+}
+.app-card img {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.app-card-info h4 {
+    font-size: 1rem;
+    font-weight: 700;
+    margin: 0 0 0.2rem;
+}
+.app-card-info p {
+    font-size: 0.82rem;
+    color: var(--text-sub);
+    margin: 0.1rem 0;
+}
+
+/* ── 요약 지표 카드 그리드 ─────────────────────────────────────── */
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+.metric-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem 1rem;
+    text-align: center;
+    box-shadow: var(--shadow);
+}
+.metric-card .metric-value {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--primary);
+    line-height: 1;
+}
+.metric-card .metric-label {
+    font-size: 0.78rem;
+    color: var(--text-sub);
+    margin-top: 0.4rem;
+}
+
+/* ── 진행 상태 바 커스텀 ───────────────────────────────────────── */
+[data-testid="stProgress"] > div > div {
+    background: linear-gradient(90deg, var(--primary), var(--primary-dark)) !important;
+    border-radius: 99px !important;
+}
+
+/* ── 로딩 박스 ─────────────────────────────────────────────────── */
+.loading-box {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2.5rem 2rem;
+    text-align: center;
+    box-shadow: var(--shadow);
+}
+.loading-parrot {
+    font-size: 4rem;
+    line-height: 1;
+    margin-bottom: 1rem;
+    display: block;
+}
+.loading-stage {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    margin-bottom: 0.5rem;
+}
+.loading-detail {
+    font-size: 0.88rem;
+    color: var(--text-sub);
+    margin-bottom: 1.5rem;
+}
+
+/* ── 탭 스타일 ─────────────────────────────────────────────────── */
+[data-testid="stTabs"] [data-testid="stMarkdownContainer"] p {
+    font-weight: 600 !important;
+}
+button[data-baseweb="tab"] {
+    font-weight: 600 !important;
+    font-size: 0.92rem !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: var(--primary) !important;
+    border-bottom-color: var(--primary) !important;
+}
+
+/* ── 데이터프레임 테이블 반응형 ────────────────────────────────── */
+[data-testid="stDataFrame"] {
+    overflow-x: auto !important;
+}
+
+/* ── 버튼 커스텀 ───────────────────────────────────────────────── */
+.stButton > button {
+    border-radius: var(--radius-sm) !important;
+    font-weight: 600 !important;
+    transition: all .2s !important;
+}
+.stButton > button[kind="primary"] {
+    background: var(--primary) !important;
+    border-color: var(--primary) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: var(--primary-dark) !important;
+    border-color: var(--primary-dark) !important;
+}
+
+/* ── 알림 박스 ─────────────────────────────────────────────────── */
+.info-box {
+    background: #EFF6FF;
+    border-left: 4px solid var(--primary);
+    border-radius: var(--radius-sm);
+    padding: 0.85rem 1rem;
+    font-size: 0.88rem;
+    color: var(--text-main);
+    margin: 0.75rem 0;
+}
+.warn-box {
+    background: #FFFBEB;
+    border-left: 4px solid var(--warning);
+    border-radius: var(--radius-sm);
+    padding: 0.85rem 1rem;
+    font-size: 0.88rem;
+    color: var(--text-main);
+    margin: 0.75rem 0;
+}
+
+/* ── 우선순위 배지 ─────────────────────────────────────────────── */
+.badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 99px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-left: 0.4rem;
+}
+.badge-high   { background: #FEE2E2; color: #B91C1C; }
+.badge-medium { background: #FEF3C7; color: #92400E; }
+.badge-low    { background: #D1FAE5; color: #065F46; }
+
+
+/* ============================================================
+   반응형: 태블릿 (≤1024px)
+   ============================================================ */
+@media (max-width: 1024px) {
+    .main .block-container {
+        padding: 1.5rem 1.25rem 3rem !important;
+    }
+    .metric-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .page-title { font-size: 1.6rem; }
+}
+
+/* ============================================================
+   반응형: 모바일 (≤768px)
+   ============================================================ */
+@media (max-width: 768px) {
+    .main .block-container {
+        padding: 1rem 0.75rem 2.5rem !important;
+        max-width: 100% !important;
+    }
+
+    /* 타이틀 */
+    .page-title  { font-size: 1.35rem; }
+    .page-subtitle { font-size: 0.88rem; }
+
+    /* 지표 카드: 2열 */
+    .metric-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.6rem;
+    }
+    .metric-card .metric-value { font-size: 1.4rem; }
+
+    /* 섹션 카드 패딩 축소 */
+    .section-card { padding: 1rem 0.875rem; }
+
+    /* 앱 카드 세로 배치 */
+    .app-card { flex-direction: column; gap: 0.6rem; }
+    .app-card img { width: 48px; height: 48px; }
+
+    /* 로딩 박스 */
+    .loading-parrot { font-size: 3rem; }
+    .loading-stage  { font-size: 0.95rem; }
+
+    /* 탭 버튼 폰트 */
+    button[data-baseweb="tab"] { font-size: 0.78rem !important; }
+
+    /* 테이블 가로 스크롤 */
+    [data-testid="stDataFrame"] {
+        font-size: 0.8rem !important;
+    }
+}
+
+/* ============================================================
+   반응형: 소형 모바일 (≤480px)
+   ============================================================ */
+@media (max-width: 480px) {
+    .metric-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+    .page-title { font-size: 1.15rem; }
+    .section-title { font-size: 0.95rem; }
+}

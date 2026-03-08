@@ -1,0 +1,14 @@
+data/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.DS_Store
+*.egg-info/
+dist/
+build/
+.streamlit/secrets.toml
+무제 폴더/
+*.ipynb_checkpoints/
+.venv/
+venv/
