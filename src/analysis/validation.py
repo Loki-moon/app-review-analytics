@@ -457,4 +457,32 @@ def run_all_validations(
     except Exception as e:
         result["sample_dist"] = {}
 
+    # 8. raw_df 기초 통계 (민감도/기간 분할 데이터 부족 안내용)
+    try:
+        from config.settings import POSITIVE_THRESHOLD, NEGATIVE_THRESHOLD  # noqa: F401
+        df_tmp = raw_df.copy()
+        df_tmp["review_date_dt"] = pd.to_datetime(df_tmp.get("review_date", None), errors="coerce")
+        mid = (
+            df_tmp["review_date_dt"].min()
+            + (df_tmp["review_date_dt"].max() - df_tmp["review_date_dt"].min()) / 2
+        ) if df_tmp["review_date_dt"].notna().any() else None
+        raw_stats: dict[str, Any] = {}
+        for app_name, grp in raw_df.groupby("app_name"):
+            total = len(grp)
+            pos   = int((grp["score"] >= POSITIVE_THRESHOLD).sum()) if "score" in grp.columns else 0
+            neg   = int((grp["score"] <= NEGATIVE_THRESHOLD).sum()) if "score" in grp.columns else 0
+            if mid is not None and "review_date" in grp.columns:
+                grp_dt = pd.to_datetime(grp["review_date"], errors="coerce")
+                n_first  = int((grp_dt <= mid).sum())
+                n_second = int((grp_dt  > mid).sum())
+            else:
+                n_first = n_second = 0
+            raw_stats[app_name] = {
+                "total": total, "pos": pos, "neg": neg,
+                "n_first_half": n_first, "n_second_half": n_second,
+            }
+        result["raw_stats"] = raw_stats
+    except Exception:
+        result["raw_stats"] = {}
+
     return result

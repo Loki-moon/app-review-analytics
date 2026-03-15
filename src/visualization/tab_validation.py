@@ -678,7 +678,30 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
     """, unsafe_allow_html=True)
 
     if combined.empty:
-        st.warning("민감도 분석을 위한 데이터가 충분하지 않습니다.")
+        raw_stats: dict = vr.get("raw_stats", {})
+        MIN_NEEDED = 50
+        rows = []
+        for app_name, st_data in raw_stats.items():
+            total = st_data.get("total", 0)
+            pos   = st_data.get("pos",   0)
+            neg   = st_data.get("neg",   0)
+            usable = min(pos, neg)
+            ok = "✅" if usable >= MIN_NEEDED else "⚠️"
+            rows.append(
+                f"{ok} <b>{app_name}</b>: 전체 {total:,}건 "
+                f"(긍정 {pos:,} / 부정 {neg:,}) — "
+                f"분석 가능 표본 {usable:,}건 "
+                f"[필요: 최소 {MIN_NEEDED}건 {'충족' if usable >= MIN_NEEDED else f'— {MIN_NEEDED - usable}건 부족'}]"
+            )
+        detail = "<br>".join(rows) if rows else "수집된 리뷰 데이터가 없습니다."
+        st.markdown(
+            f'<div class="info-box" style="border-left:4px solid #F59E0B;">'
+            f'⚠️ <b>민감도 분석을 위한 데이터가 충분하지 않습니다.</b><br>'
+            f'3점 이분화 조건을 바꾸며 로지스틱 회귀를 재실행하려면 각 앱당 <b>긍정·부정 리뷰 각 {MIN_NEEDED}건 이상</b>이 필요합니다.<br><br>'
+            f'{detail}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
         return
 
     conditions = combined["condition"].unique().tolist() if "condition" in combined.columns else []
@@ -776,7 +799,27 @@ def _render_period_stability(vr: dict[str, Any]) -> None:
     """, unsafe_allow_html=True)
 
     if pivot.empty:
-        st.warning("기간 분할 분석에 필요한 데이터가 부족합니다.")
+        raw_stats: dict = vr.get("raw_stats", {})
+        MIN_PER_PERIOD = 50
+        rows = []
+        for app_name, st_data in raw_stats.items():
+            n1 = st_data.get("n_first_half",  0)
+            n2 = st_data.get("n_second_half", 0)
+            ok1 = "✅" if n1 >= MIN_PER_PERIOD else "⚠️"
+            ok2 = "✅" if n2 >= MIN_PER_PERIOD else "⚠️"
+            rows.append(
+                f"<b>{app_name}</b>: 상반기 {ok1} {n1:,}건 / 하반기 {ok2} {n2:,}건 "
+                f"[각 기간 최소 {MIN_PER_PERIOD}건 필요]"
+            )
+        detail = "<br>".join(rows) if rows else "수집된 리뷰 데이터가 없습니다."
+        st.markdown(
+            f'<div class="info-box" style="border-left:4px solid #F59E0B;">'
+            f'⚠️ <b>기간 분할 분석에 필요한 데이터가 부족합니다.</b><br>'
+            f'상반기·하반기 각 기간별로 <b>앱당 {MIN_PER_PERIOD}건 이상</b>의 리뷰가 있어야 분석이 가능합니다.<br><br>'
+            f'{detail}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
         return
 
     periods = [c for c in ["전체", "상반기", "하반기"] if c in pivot.columns]

@@ -551,11 +551,11 @@ def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: 
         unsafe_allow_html=True,
     )
 
-    use_log = False
+    use_log = suggest_log  # 극단값 존재 시 기본으로 로그 스케일 적용
     if suggest_log:
         use_log = st.checkbox(
-            f"📐 로그 스케일 적용 (OR 최대값 {max_or:.1f} — 값 범위가 커서 권장)",
-            value=False,
+            f"📐 로그 스케일 적용 (OR 최대값 {max_or:.1f} — 값 범위가 커서 자동 활성화)",
+            value=True,
             key="or_log_scale",
         )
 
@@ -625,34 +625,80 @@ def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: 
 
 # ── 섹션 5: ΔOR 경쟁 우위/열위 ────────────────────────────────────────────────
 
+_DELTA_CLIP_THRESHOLD = 5.0   # |ΔOR| > 이 값이면 x축 클리핑
+
+
 def _delta_or_chart(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
     df_d = combined.dropna(subset=["delta_or"]).copy()
     fig = go.Figure()
+
+    # 극단값 탐지 → x축 클리핑 범위 결정
+    abs_max = df_d["delta_or"].abs().max() if not df_d.empty else 1.0
+    clip = (
+        float(df_d["delta_or"].abs().quantile(0.90)) * 1.2
+        if abs_max > _DELTA_CLIP_THRESHOLD
+        else abs_max
+    )
+    clip = max(clip, 0.5)
+    do_clip = abs_max > _DELTA_CLIP_THRESHOLD
+
     for app_name in app_names[1:]:
         sub = df_d[df_d["app_name"] == app_name].sort_values("delta_or")
         if sub.empty:
             continue
         color = app_color(app_name, app_names)
+
+        # 클리핑된 값: 실제값 표시는 hover 및 텍스트로, 막대 길이는 clip으로 제한
+        x_display = sub["delta_or"].clip(-clip, clip)
+        clipped_mask = sub["delta_or"].abs() > clip
+
+        texts = [
+            f"{'▶' if v > clip else '◀'} {sub['delta_or'].iloc[i]:.2f}"
+            if clipped_mask.iloc[i]
+            else f"{v:.2f}"
+            for i, v in enumerate(x_display)
+        ]
+
         fig.add_trace(go.Bar(
-            x=sub["delta_or"],
+            x=x_display,
             y=sub["feature_category"],
             orientation="h",
             name=app_name,
+            text=texts,
+            textposition="outside",
+            textfont=dict(size=9, color=TEXT),
             marker=dict(
                 color=[("#FF6B8A" if v < 0 else color) for v in sub["delta_or"]],
-                line=dict(color=color, width=1),
+                line=dict(color=color, width=0.8),
+                opacity=0.85,
             ),
-            hovertemplate=f"<b>{app_name}</b><br>기능: %{{y}}<br>ΔOR: %{{x:.3f}}<extra></extra>",
+            hovertemplate=(
+                f"<b>{app_name}</b><br>기능: %{{y}}<br>"
+                "실제 ΔOR: %{customdata:.3f}<extra></extra>"
+            ),
+            customdata=sub["delta_or"],
         ))
-    fig.add_vline(x=0, line_dash="dash", line_color=SUBTEXT)
+
+    fig.add_vline(x=0, line_dash="dash", line_color=SUBTEXT, line_width=1.5)
+
+    n_cats = len(df_d["feature_category"].unique())
+    clip_note = f" (극단값 클리핑: ±{clip:.1f})" if do_clip else ""
     fig.update_layout(
         title=centered_title("ΔOR — 기준 앱 대비 경쟁 우위/열위"),
-        xaxis_title="ΔOR (양수 = 우위, 음수 = 열위)",
-        height=max(350, len(df_d["feature_category"].unique()) * 30 + 120),
-        margin=dict(l=10, r=10, t=80, b=40),
+        xaxis_title=f"ΔOR (양수 = 기준앱 우위, 음수 = 기준앱 열위){clip_note}",
+        height=max(400, n_cats * 32 + 150),
+        margin=dict(l=10, r=80, t=70, b=80),
         barmode="group",
+        bargap=0.3,
+        bargroupgap=0.1,
     )
-    apply_dark_theme(fig, centered_legend=True)
+    apply_dark_theme(fig, centered_legend=False)
+    fig.update_layout(legend=dict(
+        bgcolor="#131820", bordercolor=LINE, font=dict(color=TEXT),
+        orientation="h", yanchor="top", y=-0.08, xanchor="center", x=0.5,
+    ))
+    if do_clip:
+        fig.update_xaxes(range=[-clip * 1.5, clip * 1.5])
     return fig
 
 
