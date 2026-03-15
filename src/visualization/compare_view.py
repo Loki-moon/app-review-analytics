@@ -427,10 +427,18 @@ def _render_wc_sections(proc: pd.DataFrame, app_names: list[str]) -> None:
 
 # ── 섹션 4: OR 비교 ───────────────────────────────────────────────────────────
 
-def _or_dot_plot(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
+def _or_dot_plot(combined: pd.DataFrame, app_names: list[str], use_log: bool = False) -> go.Figure:
     fig = go.Figure()
+
+    # 로그 스케일 시 OR=0 방지 (log(0)=-inf)
+    plot_combined = combined.copy()
+    if use_log:
+        plot_combined["OR"]       = plot_combined["OR"].clip(lower=0.01)
+        plot_combined["ci_lower"] = plot_combined["ci_lower"].clip(lower=0.01)
+        plot_combined["ci_upper"] = plot_combined["ci_upper"].clip(lower=0.01)
+
     for app_name in app_names:
-        app_df = combined[combined["app_name"] == app_name].copy()
+        app_df = plot_combined[plot_combined["app_name"] == app_name].copy()
         if app_df.empty:
             continue
         color = app_color(app_name, app_names)
@@ -453,16 +461,30 @@ def _or_dot_plot(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
             ),
             customdata=app_df[["ci_lower", "ci_upper", "p_value"]].values,
         ))
-    fig.add_vline(x=1.0, line_dash="dash", line_color=SUBTEXT, line_width=1.5,
+
+    vline_x = 1.0
+    fig.add_vline(x=vline_x, line_dash="dash", line_color=SUBTEXT, line_width=1.5,
                   annotation_text="OR=1 (기준)", annotation_position="top right",
                   annotation_font_color=SUBTEXT)
+
+    n_cats = len(combined["feature_category"].unique())
     fig.update_layout(
         title=centered_title("기능 카테고리별 오즈비(OR) 비교"),
-        xaxis_title="오즈비 (OR)", yaxis_title="기능 카테고리",
-        height=max(400, len(combined["feature_category"].unique()) * 35 + 150),
-        hovermode="closest", margin=dict(l=10, r=10, t=80, b=40),
+        xaxis_title="오즈비 (OR, 로그 스케일)" if use_log else "오즈비 (OR)",
+        yaxis_title="기능 카테고리",
+        height=max(400, n_cats * 35 + 150),
+        hovermode="closest",
+        # 범례를 차트 하단으로 이동 → 타이틀과 겹침 해소
+        margin=dict(l=10, r=10, t=70, b=80),
     )
-    apply_dark_theme(fig, centered_legend=True)
+    apply_dark_theme(fig, centered_legend=False)
+    fig.update_layout(legend=dict(
+        bgcolor="#131820", bordercolor=LINE, font=dict(color=TEXT),
+        orientation="h", yanchor="top", y=-0.08,
+        xanchor="center", x=0.5,
+    ))
+    if use_log:
+        fig.update_xaxes(type="log")
     return fig
 
 
@@ -489,13 +511,55 @@ def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: 
         )
         return
 
+    # 누락 OR 탐지 — 일부 앱에만 있는 기능
+    all_cats = combined_or["feature_category"].unique()
+    missing_info: dict[str, list[str]] = {}
+    for an in or_names:
+        present = set(combined_or[combined_or["app_name"] == an]["feature_category"].unique())
+        missing = sorted(set(all_cats) - present)
+        if missing:
+            missing_info[an] = missing
+
+    # 로그 스케일 권장 여부 (OR > 5 존재 시)
+    max_or = combined_or["OR"].max() if "OR" in combined_or.columns else 0
+    suggest_log = max_or > 5
+
+    missing_html = ""
+    if missing_info:
+        rows = " | ".join(
+            f"<b>{an}</b>: {', '.join(cats[:3])}{'…' if len(cats) > 3 else ''} ({len(cats)}개 미표시)"
+            for an, cats in missing_info.items()
+        )
+        missing_html = (
+            f'<br>⚠️ <b>일부 기능의 OR이 특정 앱에서 누락됨</b> — {rows}.<br>'
+            f'&nbsp;&nbsp;원인: 해당 앱 리뷰에서 기능 키워드가 충분히 등장하지 않아 '
+            f'로지스틱 회귀분석이 수렴하지 못했거나, 해당 기능 관련 리뷰 언급 자체가 없는 경우입니다.'
+        )
+
+    log_hint = (
+        f'<br>📐 <b>OR 최대값({max_or:.1f})이 크게 나타남</b> — 아래 로그 스케일 체크 시 '
+        f'값이 큰 기능과 작은 기능의 차이를 동시에 비교할 수 있습니다.'
+        if suggest_log else ""
+    )
+
     st.markdown(
-        '<div class="info-box">'
-        'OR > 1: 긍정 연관 | OR &lt; 1: 부정 연관 | 오차막대: 95% 신뢰구간'
-        '</div>',
+        f'<div class="info-box">'
+        f'<b>OR &gt; 1</b>: 해당 기능 언급 시 긍정 평점 확률 증가 &nbsp;|&nbsp; '
+        f'<b>OR &lt; 1</b>: 부정 리뷰와 더 연관 &nbsp;|&nbsp; <b>오차막대</b>: 95% 신뢰구간'
+        f'{log_hint}{missing_html}'
+        f'</div>',
         unsafe_allow_html=True,
     )
-    st.plotly_chart(_or_dot_plot(combined_or, or_names), use_container_width=True)
+
+    use_log = False
+    if suggest_log:
+        use_log = st.checkbox(
+            f"📐 로그 스케일 적용 (OR 최대값 {max_or:.1f} — 값 범위가 커서 권장)",
+            value=False,
+            key="or_log_scale",
+        )
+
+    st.plotly_chart(_or_dot_plot(combined_or, or_names, use_log=use_log), use_container_width=True)
 
     # OR 상세 테이블
     st.markdown("##### 오즈비 상세 테이블")
