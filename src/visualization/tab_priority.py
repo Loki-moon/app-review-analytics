@@ -21,17 +21,22 @@ from src.visualization._common import (
 )
 
 # 다크 배경용 사분면 색상 (반투명)
+# X축 기준: 양수 = 기준앱 경쟁 우위, 음수 = 기준앱 경쟁 열위
 _QUADRANT_LABELS = {
-    "Q1": ("경쟁 열위 & 개선 시급",  "rgba(185,28,28,0.18)",    "#FF8A9A"),   # 좌상
-    "Q2": ("경쟁 우위 유지 영역",    "rgba(6,95,70,0.18)",      "#4FD6A5"),   # 우상
-    "Q3": ("산업 공통 문제",          "rgba(146,64,14,0.12)",    "#FBB55C"),   # 좌하
-    "Q4": ("경쟁사 우위 영역",        "rgba(30,64,175,0.12)",    "#7BA7F5"),   # 우하
+    "Q1": ("경쟁 열위 & 개선 시급",  "rgba(185,28,28,0.18)",    "#FF8A9A"),   # 좌상 ← 기준앱 약함 + 우선순위 높음
+    "Q2": ("경쟁 우위 유지 영역",    "rgba(6,95,70,0.18)",      "#4FD6A5"),   # 우상 ← 기준앱 강함 + 우선순위 높음
+    "Q3": ("산업 공통 문제",          "rgba(146,64,14,0.12)",    "#FBB55C"),   # 좌하 ← 경쟁사도 함께 약한 영역
+    "Q4": ("현상 유지 영역",          "rgba(30,64,175,0.12)",    "#7BA7F5"),   # 우하 ← 기준앱 강함, 상대적 저우선순위
 }
 
 
 
 
-def _build_scatter(matrix_df: pd.DataFrame, app_or_data: pd.DataFrame) -> go.Figure:
+def _build_scatter(
+    matrix_df: pd.DataFrame,
+    app_or_data: pd.DataFrame,
+    base_app: str | None = None,
+) -> go.Figure:
     fig = go.Figure()
 
     x_mid = 0.0
@@ -59,8 +64,13 @@ def _build_scatter(matrix_df: pd.DataFrame, app_or_data: pd.DataFrame) -> go.Fig
         )
 
     # 기준선
-    fig.add_vline(x=0, line_dash="dash", line_color=_SUBTEXT, line_width=1)
-    fig.add_hline(y=y_mid, line_dash="dash", line_color=_SUBTEXT, line_width=1)
+    base_label = f"{base_app} 기준" if base_app else "기준선"
+    fig.add_vline(x=0, line_dash="dash", line_color=_SUBTEXT, line_width=1,
+                  annotation_text=base_label, annotation_position="top right",
+                  annotation_font_color=_SUBTEXT, annotation_font_size=10)
+    fig.add_hline(y=y_mid, line_dash="dash", line_color=_SUBTEXT, line_width=1,
+                  annotation_text="우선순위 중간값", annotation_position="right",
+                  annotation_font_color=_SUBTEXT, annotation_font_size=10)
 
     # 산점도
     for _, row in matrix_df.iterrows():
@@ -73,7 +83,16 @@ def _build_scatter(matrix_df: pd.DataFrame, app_or_data: pd.DataFrame) -> go.Fig
         if not app_or_data.empty:
             sub = app_or_data[app_or_data["feature_category"] == cat]
             for _, r2 in sub.iterrows():
-                or_detail += f"{r2['app_name']}: OR={r2['OR']:.3f}<br>"
+                or_detail += f"  {r2['app_name']}: OR={r2['OR']:.3f}<br>"
+
+        delta_label = (
+            f"ΔOR ({base_app} 기준): {x_val:+.3f}"
+            if base_app
+            else f"ΔOR (평균): {x_val:.3f}"
+        )
+        position_label = (
+            "→ 기준앱 경쟁 우위" if x_val > 0 else "→ 기준앱 경쟁 열위"
+        ) if base_app else ""
 
         fig.add_trace(go.Scatter(
             x=[x_val],
@@ -91,21 +110,28 @@ def _build_scatter(matrix_df: pd.DataFrame, app_or_data: pd.DataFrame) -> go.Fig
             showlegend=False,
             hovertemplate=(
                 f"<b>{cat}</b><br>"
-                f"ΔOR (평균): {x_val:.3f}<br>"
+                f"{delta_label}  {position_label}<br>"
                 f"우선순위 점수: {y_val:.3f}<br>"
-                f"OR (평균): {or_val:.3f}<br>"
+                f"OR (기준앱): {or_val:.3f}<br>"
                 f"{or_detail}"
                 "<extra></extra>"
             ),
         ))
 
+    x_axis_title = (
+        f"← {base_app} 경쟁 열위 &nbsp;&nbsp; | &nbsp;&nbsp; ΔOR &nbsp;&nbsp; | &nbsp;&nbsp; {base_app} 경쟁 우위 →"
+        if base_app
+        else "ΔOR (← 경쟁 열위 | 경쟁 우위 →)"
+    )
     fig.update_layout(
-        title=centered_title("기능 개선 우선순위 매트릭스"),
-        xaxis_title="ΔOR (경쟁 우위 ↔ 열위)",
-        yaxis_title="우선순위 점수",
+        title=centered_title(
+            f"기능 개선 우선순위 매트릭스 ({base_app} 기준)" if base_app else "기능 개선 우선순위 매트릭스"
+        ),
+        xaxis_title=x_axis_title,
+        yaxis_title="우선순위 점수 (높을수록 개선 시급)",
         height=600,
         hovermode="closest",
-        margin=dict(l=10, r=10, t=80, b=40),
+        margin=dict(l=10, r=10, t=80, b=60),
     )
     apply_dark_theme(fig)
     fig.update_xaxes(range=x_range, zeroline=False)

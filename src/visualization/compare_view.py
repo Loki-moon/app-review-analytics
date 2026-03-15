@@ -707,28 +707,34 @@ def _render_priority_section(combined_or: pd.DataFrame, app_names: list[str], ra
         )
         return
 
+    comp_apps = [a for a in app_names if a != base_app]
+    comp_label = " · ".join(comp_apps) if comp_apps else "비교 앱"
     st.markdown(
-        '<div class="info-box">'
-        '<b>좌상단(경쟁 열위 & 개선 시급)</b>: 즉각 개선이 필요한 기능 영역<br>'
-        '우선순위 점수 = 0.6 × |ΔOR| + 0.4 × 취약도 | 점수가 높을수록 개선 우선순위 높음'
-        '</div>',
+        f'<div class="info-box">'
+        f'<b>기준앱: {base_app}</b> 기준으로 경쟁사({comp_label}) 대비 기능별 경쟁 포지션을 분석합니다.<br>'
+        f'<b>X축 ΔOR</b>: 양수(+) = {base_app}이 경쟁사보다 해당 기능 긍정 평가 높음 (경쟁 우위) /'
+        f' 음수(-) = {base_app}이 경쟁사보다 낮음 (경쟁 열위)<br>'
+        f'<b>Y축 우선순위 점수</b> = 0.6 × |ΔOR| + 0.4 × 취약도 &nbsp;|&nbsp; 높을수록 개선 효과 큼<br>'
+        f'<b>취약도</b>: {base_app}의 OR이 1 미만일수록 증가 (부정 리뷰와 더 강하게 연관된 기능)'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
     try:
-        matrix_df = get_priority_matrix_df(combined_or)
+        matrix_df = get_priority_matrix_df(combined_or, base_app=base_app)
         if matrix_df.empty:
             st.info("매트릭스 계산 결과가 없습니다.")
             return
 
-        matrix_fig = _build_scatter(matrix_df, combined_or)
+        matrix_fig = _build_scatter(matrix_df, combined_or, base_app=base_app)
         st.plotly_chart(matrix_fig, use_container_width=True)
 
         # 우선순위 상세 테이블
-        st.markdown("##### 기능별 우선순위 상세 테이블")
+        st.markdown(f"##### 기능별 우선순위 상세 테이블 ({base_app} 기준)")
         table_cols = {
             "feature_category": "기능 카테고리",
-            "delta_or_mean": "ΔOR 평균",
+            "delta_or_mean": f"ΔOR ({base_app} 기준)",
+            "or_mean": f"OR ({base_app})",
             "priority_score_max": "우선순위 점수",
         }
         if "vulnerability_score" in matrix_df.columns:
@@ -741,63 +747,54 @@ def _render_priority_section(combined_or: pd.DataFrame, app_names: list[str], ra
             use_container_width=True, height=360,
         )
 
-        # 종합 Insight — 핵심 도출
-        top5       = matrix_df.nlargest(min(5, len(matrix_df)), "priority_score_max")
-        urgent_q   = matrix_df[
-            (matrix_df.get("delta_or_mean", pd.Series(dtype=float)) < 0) &
-            (matrix_df["priority_score_max"] >= matrix_df["priority_score_max"].median())
-        ] if "delta_or_mean" in matrix_df.columns else matrix_df.iloc[0:0]
+        # 사분면별 기능 분류
+        q1 = matrix_df[(matrix_df["delta_or_mean"] < 0) & (matrix_df["priority_score_max"] >= matrix_df["priority_score_max"].median())]  # 경쟁 열위 & 개선 시급
+        q2 = matrix_df[(matrix_df["delta_or_mean"] >= 0) & (matrix_df["priority_score_max"] >= matrix_df["priority_score_max"].median())]  # 경쟁 우위 유지
+        q3 = matrix_df[(matrix_df["delta_or_mean"] < 0) & (matrix_df["priority_score_max"] < matrix_df["priority_score_max"].median())]   # 산업 공통 문제
+        q4 = matrix_df[(matrix_df["delta_or_mean"] >= 0) & (matrix_df["priority_score_max"] < matrix_df["priority_score_max"].median())]  # 현상 유지
 
-        top5_text  = " → ".join(
-            f"<b>{r['feature_category']}</b>(점수 {r['priority_score_max']:.2f})"
-            for _, r in top5.iterrows()
-        )
-        urgent_text = ", ".join(f"<b>{r['feature_category']}</b>" for _, r in urgent_q.iterrows()) if not urgent_q.empty else "없음"
+        def _cat_list(df: pd.DataFrame, n: int = 3) -> str:
+            return ", ".join(f"<b>{r['feature_category']}</b>" for _, r in df.head(n).iterrows()) or "없음"
 
-        # 앱별 가장 개선 시급한 기능
+        # 앱별 Insight: 기준앱 + 경쟁앱
         app_items = []
-        for app_name in app_names[1:]:
+        base_color = app_color(base_app, app_names)
+        app_items.append((
+            base_app, base_color,
+            f"기준앱 기준 전체 <b>{len(matrix_df)}</b>개 기능 평가. "
+            f"경쟁 열위 & 개선 시급({len(q1)}개): {_cat_list(q1)}. "
+            f"경쟁 우위 유지({len(q2)}개): {_cat_list(q2)}. "
+            f"산업 공통 문제({len(q3)}개): {_cat_list(q3)}."
+        ))
+        for app_name in comp_apps:
             color = app_color(app_name, app_names)
             sub_or = combined_or[combined_or["app_name"] == app_name] if not combined_or.empty else pd.DataFrame()
-            if "priority_score" in sub_or.columns and not sub_or.empty:
-                top_pr = sub_or.dropna(subset=["priority_score"])
-                if not top_pr.empty:
-                    top1   = top_pr.nlargest(1, "priority_score").iloc[0]
-                    worst1 = sub_or[sub_or.get("delta_or", pd.Series(dtype=float)) < 0] if "delta_or" in sub_or.columns else pd.DataFrame()
-                    worst1_str = ""
-                    if not worst1.empty:
-                        w1 = worst1.nlargest(1, "priority_score").iloc[0] if "priority_score" in worst1.columns else worst1.iloc[0]
-                        worst1_str = f" · 열위 1위: <b>{w1.get('feature_category', '-')}</b>"
-                    app_items.append((
-                        app_name, color,
-                        f"vs <b>{base_app}</b> — "
-                        f"우선순위 1위: <b>{top1['feature_category']}</b> (점수 {top1['priority_score']:.2f}){worst1_str}. "
-                        f"이 기능의 사용자 경험을 개선하면 긍정 평점 상승 효과가 가장 클 것으로 예상됩니다."
-                    ))
-                else:
-                    app_items.append((app_name, color, "우선순위 데이터를 계산할 수 없습니다."))
+            if "OR" in sub_or.columns and not sub_or.empty:
+                top_adv = sub_or[sub_or.get("delta_or", pd.Series(dtype=float)) > 0].nlargest(1, "OR") if "delta_or" in sub_or.columns else pd.DataFrame()
+                adv_str = f"경쟁 우위 기능: <b>{top_adv.iloc[0]['feature_category']}</b> (OR={top_adv.iloc[0]['OR']:.2f})" if not top_adv.empty else ""
+                app_items.append((
+                    app_name, color,
+                    f"대비 앱 — {adv_str if adv_str else '유의미한 경쟁 우위 기능 없음'}. "
+                    f"{base_app}의 경쟁 열위 분석에 활용된 비교 앱입니다."
+                ))
             else:
-                app_items.append((app_name, color, "OR 데이터 부족으로 우선순위를 계산할 수 없습니다."))
-
-        # 전체 요약 아이템도 추가 (기준 앱 포함)
-        base_color = app_color(base_app, app_names)
-        app_items.insert(0, (
-            base_app, base_color,
-            f"기준 앱 — 전체 {len(matrix_df)}개 기능 평가됨. "
-            f"경쟁 열위 & 개선 시급 영역: {len(urgent_q)}개 기능."
-        ))
+                app_items.append((app_name, color, "OR 데이터 부족으로 상세 비교 불가."))
 
         summary = (
-            f"개선 우선순위 Top 5: {top5_text}. "
-            f"경쟁 열위이면서 개선 효과가 높은 핵심 개선 영역: {urgent_text}. "
-            f"이 기능들을 먼저 개선하면 사용자 만족도와 경쟁력을 동시에 높일 수 있습니다."
+            f"<b>{base_app}</b>의 즉시 개선 영역(경쟁 열위 & 우선순위 높음): {_cat_list(q1, 5)}. "
+            f"경쟁 우위 유지 영역: {_cat_list(q2, 3)}. "
+            f"산업 공통 문제(경쟁사도 함께 약함): {_cat_list(q3, 3)}. "
+            f"좌상단 기능을 우선 개선하면 경쟁력 및 사용자 만족도를 동시에 높일 수 있습니다."
         )
 
         render_insight_box(
-            "기능 개선 우선순위 매트릭스",
-            "기능별 경쟁 열위(ΔOR)와 사용자 불만도(취약도)를 결합해 개선 우선순위를 산출합니다.",
-            "좌상단(경쟁 열위 & 개선 시급) 기능부터 개선하면 투자 대비 효과가 가장 큽니다. "
-            "이 분석은 제품 로드맵의 우선순위 설정에 직접 활용할 수 있습니다.",
+            f"기능 개선 우선순위 매트릭스 ({base_app} 기준)",
+            f"기준앱({base_app})의 OR과 경쟁사 평균 OR의 차이(ΔOR)와 취약도를 결합해 "
+            f"기능별 개선 우선순위를 산출합니다. ΔOR > 0이면 {base_app} 경쟁 우위, < 0이면 경쟁 열위.",
+            f"<b>좌상단(경쟁 열위 & 개선 시급)</b>: {base_app}이 경쟁사보다 약하면서 우선순위가 높은 기능 — 즉시 개선 효과 최대. "
+            f"<b>우상단(경쟁 우위 유지)</b>: 강점을 유지하며 현 수준을 고수할 영역. "
+            f"<b>좌하단(산업 공통 문제)</b>: 경쟁사도 함께 약한 기능 — 업계 전반적 개선 여지. "
+            f"<b>우하단(현상 유지)</b>: {base_app}이 강하지만 상대적 중요도 낮음.",
             app_items,
             summary=summary,
         )

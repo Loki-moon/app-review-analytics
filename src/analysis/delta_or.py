@@ -72,14 +72,58 @@ def compute_delta_or(
     return result[existing].sort_values(["feature_category", "app_name"])
 
 
-def get_priority_matrix_df(combined: pd.DataFrame) -> pd.DataFrame:
+def get_priority_matrix_df(
+    combined: pd.DataFrame,
+    base_app: str | None = None,
+) -> pd.DataFrame:
     """
-    우선순위 매트릭스용 집계 DataFrame.
-    x = delta_or 평균, y = priority_score 최대 (앱별 취약도 반영)
+    우선순위 매트릭스용 집계 DataFrame (기준앱 기준).
+
+    base_app이 주어지면 기준앱 시각에서 ΔOR을 계산합니다.
+      delta_or_mean = OR_base - mean(OR_competitors)
+      → 양수(+): 기준앱 경쟁 우위 / 음수(-): 기준앱 경쟁 열위
+
+    base_app이 없으면 기존 방식(전체 평균)을 사용합니다.
     """
     if combined.empty:
         return pd.DataFrame()
 
+    app_names = combined["app_name"].unique().tolist()
+
+    if base_app is not None and base_app in app_names:
+        base_df = combined[combined["app_name"] == base_app].copy()
+        comp_df = combined[combined["app_name"] != base_app]
+
+        if base_df.empty:
+            return pd.DataFrame()
+
+        # 경쟁사 평균 OR
+        if not comp_df.empty:
+            comp_mean = (
+                comp_df.groupby("feature_category")["OR"]
+                .mean()
+                .rename("OR_comp_mean")
+            )
+            base_df = base_df.merge(comp_mean, on="feature_category", how="left")
+            base_df["OR_comp_mean"] = base_df["OR_comp_mean"].fillna(base_df["OR"])
+        else:
+            base_df["OR_comp_mean"] = base_df["OR"]
+
+        # 기준앱 시각: 양수 = 기준앱 우위, 음수 = 기준앱 열위
+        base_df["delta_or_mean"] = (base_df["OR"] - base_df["OR_comp_mean"]).round(4)
+        base_df["vulnerability"]  = (1.0 - base_df["OR"]).clip(lower=0)
+
+        w_d = PRIORITY_WEIGHTS["w_delta"]
+        w_v = PRIORITY_WEIGHTS["w_vuln"]
+        base_df["priority_score_max"] = (
+            w_d * base_df["delta_or_mean"].abs() + w_v * base_df["vulnerability"]
+        ).round(4)
+
+        return base_df[["feature_category", "delta_or_mean", "priority_score_max", "OR"]].rename(
+            columns={"OR": "or_mean"}
+        ).reset_index(drop=True)
+
+    # ── 기존 방식 (base_app 미지정 시) ──────────────────────────────────────────
     pivot = (
         combined.groupby("feature_category")
         .agg(
