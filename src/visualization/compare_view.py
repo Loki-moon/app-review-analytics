@@ -119,14 +119,15 @@ def _score_dist_chart(raw_df: pd.DataFrame, app_names: list[str]) -> go.Figure:
 
 def _review_trend_chart(raw_df: pd.DataFrame, app_names: list[str], use_daily: bool) -> go.Figure:
     fig = go.Figure()
+    date_col = "review_date" if "review_date" in raw_df.columns else "date"
     for app_name in app_names:
         app_df = raw_df[raw_df["app_name"] == app_name].copy()
-        if "date" not in app_df.columns:
+        if date_col not in app_df.columns:
             continue
-        app_df["date"] = pd.to_datetime(app_df["date"], errors="coerce")
-        app_df = app_df.dropna(subset=["date"])
+        app_df[date_col] = pd.to_datetime(app_df[date_col], errors="coerce")
+        app_df = app_df.dropna(subset=[date_col])
         fmt = "%Y-%m-%d" if use_daily else "%Y-%m"
-        app_df["period"] = app_df["date"].dt.strftime(fmt)
+        app_df["period"] = app_df[date_col].dt.strftime(fmt)
         trend = app_df.groupby("period").size().reset_index(name="count").sort_values("period")
         color = app_color(app_name, app_names)
         fig.add_trace(go.Scatter(
