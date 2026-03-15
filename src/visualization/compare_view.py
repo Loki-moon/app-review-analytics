@@ -46,21 +46,21 @@ _MIN_REVIEWS_STABLE = 100
 
 # ── Font helper ───────────────────────────────────────────────────────────────
 
-def _get_font_path() -> str:
+def _get_font_path() -> str | None:
     import os
     candidates = [
         str(_BUNDLED_FONT),
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/nanum/NanumGothic.ttf",
         "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
         "/System/Library/Fonts/AppleGothic.ttf",
         "/Library/Fonts/AppleGothic.ttf",
         "/opt/homebrew/share/fonts/nanum/NanumGothic.ttf",
-        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-        "/usr/share/fonts/nanum/NanumGothic.ttf",
     ]
     for p in candidates:
         if os.path.exists(p):
             return p
-    return str(_BUNDLED_FONT)
+    return None
 
 
 # ── Wordcloud helper ──────────────────────────────────────────────────────────
@@ -69,12 +69,14 @@ def _make_wordcloud(tokens: list[list[str]], colormap: str = "cool") -> bytes | 
     counter: Counter = Counter(t for tl in tokens for t in tl)
     if not counter:
         return None
+    font_path = _get_font_path()
     kwargs = dict(
         max_words=WORDCLOUD_MAX_WORDS,
         background_color=BG, width=600, height=300,
         colormap=colormap, prefer_horizontal=0.9,
-        font_path=_get_font_path(),
     )
+    if font_path:
+        kwargs["font_path"] = font_path
     wc = WordCloud(**kwargs)
     wc.generate_from_frequencies(counter)
     fig, ax = plt.subplots(figsize=(8, 4), facecolor=BG)

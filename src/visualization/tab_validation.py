@@ -26,10 +26,29 @@ from config.settings import APP_COLORS, ASSETS_DIR
 
 # ── 한글 폰트 설정 (Streamlit Cloud 대응) ─────────────────────────────────────
 _BUNDLED_FONT = ASSETS_DIR / "fonts" / "NanumGothic.ttf"
-if _BUNDLED_FONT.exists():
-    fm.fontManager.addfont(str(_BUNDLED_FONT))
-    matplotlib.rcParams["font.family"] = "NanumGothic"
 matplotlib.rcParams["axes.unicode_minus"] = False
+
+def _setup_matplotlib_korean() -> None:
+    """한글 폰트를 matplotlib에 등록. packages.txt fonts-nanum 설치 후 동작."""
+    import os
+    candidates = [
+        str(_BUNDLED_FONT),
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/nanum/NanumGothic.ttf",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/Library/Fonts/AppleGothic.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                fm.fontManager.addfont(path)
+                prop = fm.FontProperties(fname=path)
+                matplotlib.rcParams["font.family"] = prop.get_name()
+                return
+            except Exception:
+                continue
+
+_setup_matplotlib_korean()
 
 # ── 다크 테마 상수 ─────────────────────────────────────────────────────────────
 _BG      = "#0E1116"
@@ -49,12 +68,14 @@ def _get_font_family() -> str:
     font_files = {
         "NanumGothic": [
             str(_BUNDLED_FONT),
-            str(ASSETS_DIR / "NanumGothic.ttf"),
             "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
             "/usr/share/fonts/nanum/NanumGothic.ttf",
         ],
+        "AppleGothic": [
+            "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+            "/Library/Fonts/AppleGothic.ttf",
+        ],
         "Malgun Gothic": ["C:/Windows/Fonts/malgun.ttf"],
-        "Apple SD Gothic Neo": ["/System/Library/Fonts/Supplemental/AppleSDGothicNeo.ttc"],
     }
     for name, paths in font_files.items():
         if any(os.path.exists(p) for p in paths):
