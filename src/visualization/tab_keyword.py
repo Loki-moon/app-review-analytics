@@ -24,25 +24,26 @@ from src.visualization._common import (
 )
 
 
-def _get_font_path() -> str | None:
-    """시스템 한국어 폰트 탐색"""
+_BUNDLED_FONT = ASSETS_DIR / "fonts" / "NanumGothic.ttf"
+
+
+def _get_font_path() -> str:
+    """번들 폰트 우선, 없으면 시스템 폰트 탐색"""
+    import os
     candidates = [
-        str(ASSETS_DIR / "NanumGothic.ttf"),
-        # macOS
+        str(_BUNDLED_FONT),
         "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
         "/System/Library/Fonts/AppleGothic.ttf",
         "/Library/Fonts/AppleGothic.ttf",
         "/opt/homebrew/share/fonts/nanum/NanumGothic.ttf",
         "/opt/homebrew/share/fonts/NanumGothic.ttf",
-        # Linux
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "/usr/share/fonts/nanum/NanumGothic.ttf",
     ]
-    import os
     for path in candidates:
         if os.path.exists(path):
             return path
-    return None
+    return str(_BUNDLED_FONT)
 
 
 _BG = "#0E1116"
@@ -62,7 +63,6 @@ def _make_wordcloud(token_counter: Counter, title: str, bg_color: str = _BG,
     if not token_counter:
         return None
 
-    font_path = _get_font_path()
     wc_kwargs = dict(
         max_words=WORDCLOUD_MAX_WORDS,
         background_color=bg_color,
@@ -70,10 +70,8 @@ def _make_wordcloud(token_counter: Counter, title: str, bg_color: str = _BG,
         height=320,
         colormap=colormap,
         prefer_horizontal=0.9,
+        font_path=_get_font_path(),
     )
-    if font_path:
-        wc_kwargs["font_path"] = font_path
-
     wc = WordCloud(**wc_kwargs)
     wc.generate_from_frequencies(token_counter)
 

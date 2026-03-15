@@ -15,6 +15,7 @@ from typing import Any
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -22,6 +23,13 @@ import seaborn as sns
 import streamlit as st
 
 from config.settings import APP_COLORS, ASSETS_DIR
+
+# ── 한글 폰트 설정 (Streamlit Cloud 대응) ─────────────────────────────────────
+_BUNDLED_FONT = ASSETS_DIR / "fonts" / "NanumGothic.ttf"
+if _BUNDLED_FONT.exists():
+    fm.fontManager.addfont(str(_BUNDLED_FONT))
+    matplotlib.rcParams["font.family"] = "NanumGothic"
+matplotlib.rcParams["axes.unicode_minus"] = False
 
 # ── 다크 테마 상수 ─────────────────────────────────────────────────────────────
 _BG      = "#0E1116"
@@ -40,8 +48,10 @@ def _get_font_family() -> str:
     import os
     font_files = {
         "NanumGothic": [
+            str(_BUNDLED_FONT),
             str(ASSETS_DIR / "NanumGothic.ttf"),
             "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+            "/usr/share/fonts/nanum/NanumGothic.ttf",
         ],
         "Malgun Gothic": ["C:/Windows/Fonts/malgun.ttf"],
         "Apple SD Gothic Neo": ["/System/Library/Fonts/Supplemental/AppleSDGothicNeo.ttc"],
