@@ -77,6 +77,7 @@ streamlit run app.py
 
 ## 문의
 
+- https://app-review-analytics.streamlit.app/
 - **연구자**: Loki Moon
 - **이메일**: wata0414@gmail.com
 - 논문 발표 전 무단 배포 금지
