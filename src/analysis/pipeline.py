@@ -108,7 +108,8 @@ def run_pipeline(
     # ── Step 5: 기능 카테고리 더미 ────────────────────────────────────────────
     _cb(progress_callback, 5, "기능 카테고리를 매핑하고 있어요...")
     try:
-        dummy_df = map_feature_categories(tokens_clean)
+        raw_texts = df["content_clean"].fillna("").tolist()
+        dummy_df = map_feature_categories(tokens_clean, raw_texts=raw_texts)
         dummy_df.index = df.index
         df = pd.concat([df, dummy_df], axis=1)
     except Exception as e:
@@ -137,12 +138,26 @@ def run_pipeline(
     for app_name, app_df in df.groupby("app_name"):
         reg_df = build_regression_df(app_df)
         if len(reg_df) < 30:
-            output["errors"].append(f"[{app_name}] 데이터가 부족하여 회귀 분석을 건너뜁니다.")
+            output["errors"].append(
+                f"[{app_name}] OR 분석 제외: 유효 리뷰 {len(reg_df)}건 (최소 30건 필요). "
+                f"수집 기간을 늘리거나 더 많은 리뷰를 확보해주세요."
+            )
             continue
         try:
             or_df = run_logistic_regression(reg_df, feature_cols)
             if not or_df.empty:
                 or_results[str(app_name)] = or_df
+            else:
+                # 언급 수 부족으로 모든 카테고리가 제외된 경우
+                n_total = len(reg_df)
+                keyword_sums = reg_df[feature_cols].sum().sort_values(ascending=False)
+                top3 = ", ".join(f"{c.replace('keyword_','')}({int(v)}건)"
+                                 for c, v in keyword_sums.head(3).items())
+                output["errors"].append(
+                    f"[{app_name}] OR 분석 결과 없음: 유효 리뷰 {n_total}건 중 "
+                    f"기능 언급이 3건 이상인 카테고리가 없습니다. "
+                    f"상위 언급: {top3 or '없음'}"
+                )
         except Exception as e:
             output["errors"].append(f"[{app_name}] 회귀 분석 실패: {e}")
 
@@ -152,7 +167,13 @@ def run_pipeline(
     _cb(progress_callback, 7, "ΔOR 및 우선순위 점수를 계산하고 있어요...")
     if len(or_results) >= 2:
         try:
-            base_app = list(or_results.keys())[0]
+            # 사용자가 첫 번째로 선택한 앱을 기준앱으로 사용
+            # raw_df는 수집 순서대로 쌓이므로 첫 번째 app_name이 분석앱
+            first_app_in_data = raw_df["app_name"].iloc[0] if not raw_df.empty else None
+            if first_app_in_data and first_app_in_data in or_results:
+                base_app = first_app_in_data
+            else:
+                base_app = list(or_results.keys())[0]
             combined = compute_delta_or(or_results, base_app)
             output["combined_or"] = combined
         except Exception as e:

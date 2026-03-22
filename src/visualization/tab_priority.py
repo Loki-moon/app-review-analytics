@@ -12,7 +12,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from config.settings import APP_COLORS
 from src.analysis.delta_or import get_priority_matrix_df
 from src.visualization._common import (
     BG as _BG, GRID as _GRID, LINE as _LINE, TEXT as _TEXT, SUBTEXT as _SUBTEXT,
@@ -32,6 +31,17 @@ _QUADRANT_LABELS = {
 
 
 
+def _quadrant_marker_color(x_val: float, y_val: float, x_mid: float, y_mid: float) -> str:
+    """Return the quadrant-based fill color for a scatter marker."""
+    if x_val >= x_mid and y_val >= y_mid:
+        return _QUADRANT_LABELS["Q2"][2]   # green  — 경쟁 우위 유지
+    if x_val < x_mid and y_val >= y_mid:
+        return _QUADRANT_LABELS["Q1"][2]   # red    — 경쟁 열위 & 개선 시급
+    if x_val < x_mid and y_val < y_mid:
+        return _QUADRANT_LABELS["Q3"][2]   # orange — 산업 공통 문제
+    return _QUADRANT_LABELS["Q4"][2]       # blue   — 현상 유지
+
+
 def _build_scatter(
     matrix_df: pd.DataFrame,
     app_or_data: pd.DataFrame,
@@ -42,8 +52,14 @@ def _build_scatter(
     x_mid = 0.0
     y_mid = matrix_df["priority_score_max"].median() if not matrix_df.empty else 0.5
 
-    x_range = [matrix_df["delta_or_mean"].min() - 0.5, matrix_df["delta_or_mean"].max() + 0.5]
-    y_range = [0, matrix_df["priority_score_max"].max() * 1.2 + 0.1]
+    # ── 대칭 x축 범위 + 균형 잡힌 y축 ─────────────────────────────────────────
+    x_abs_max = max(abs(matrix_df["delta_or_mean"].min()), abs(matrix_df["delta_or_mean"].max()))
+    x_pad = max(0.6, x_abs_max * 0.18)
+    x_range = [-(x_abs_max + x_pad), x_abs_max + x_pad]
+
+    y_max_raw = matrix_df["priority_score_max"].max()
+    y_pad = max(0.15, y_max_raw * 0.18)
+    y_range = [0, y_max_raw + y_pad]
 
     quadrants = [
         (x_range[0], x_mid, y_mid, y_range[1], "Q1"),
@@ -55,11 +71,12 @@ def _build_scatter(
         label, fillcolor, font_color = _QUADRANT_LABELS[q]
         fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
                       fillcolor=fillcolor, opacity=1.0, layer="below", line_width=0)
+        label_y = y0 + (y1 - y0) * 0.94
         fig.add_annotation(
-            x=(x0 + x1) / 2, y=y1 * 0.95,
+            x=(x0 + x1) / 2, y=label_y,
             text=f"<b>{label}</b>",
             showarrow=False,
-            font=dict(size=11, color=font_color),
+            font=dict(size=12, color=font_color),
             xanchor="center",
         )
 
@@ -72,12 +89,13 @@ def _build_scatter(
                   annotation_text="우선순위 중간값", annotation_position="right",
                   annotation_font_color=_SUBTEXT, annotation_font_size=10)
 
-    # 산점도
+    # ── 산점도 — 사분면 컬러로 마커 색상 결정 ─────────────────────────────────
     for _, row in matrix_df.iterrows():
         cat = row["feature_category"]
         x_val = row["delta_or_mean"]
         y_val = row["priority_score_max"]
         or_val = row["or_mean"]
+        marker_color = _quadrant_marker_color(x_val, y_val, x_mid, y_mid)
 
         or_detail = ""
         if not app_or_data.empty:
@@ -94,16 +112,20 @@ def _build_scatter(
             "→ 기준앱 경쟁 우위" if x_val > 0 else "→ 기준앱 경쟁 열위"
         ) if base_app else ""
 
+        # 마커 크기: y값 비례, 최소 14 최대 32
+        msize = max(14, min(32, y_val * 35 + 12))
+
         fig.add_trace(go.Scatter(
             x=[x_val],
             y=[y_val],
             mode="markers+text",
             text=[cat],
             textposition="top center",
-            textfont=dict(size=10, color=_TEXT),
+            textfont=dict(size=9, color=_TEXT),
             marker=dict(
-                size=max(12, min(30, y_val * 40 + 10)),
-                color=APP_COLORS[hash(cat) % len(APP_COLORS)],
+                size=msize,
+                color=marker_color,
+                opacity=0.88,
                 line=dict(width=1.5, color="white"),
             ),
             name=cat,
@@ -123,15 +145,20 @@ def _build_scatter(
         if base_app
         else "ΔOR (← 경쟁 열위 | 경쟁 우위 →)"
     )
+
+    # 데이터 포인트 수 기반으로 동적 높이 결정
+    n_points = len(matrix_df)
+    chart_height = max(850, n_points * 20 + 400)
+
     fig.update_layout(
         title=centered_title(
             f"기능 개선 우선순위 매트릭스 ({base_app} 기준)" if base_app else "기능 개선 우선순위 매트릭스"
         ),
         xaxis_title=x_axis_title,
         yaxis_title="우선순위 점수 (높을수록 개선 시급)",
-        height=600,
+        height=chart_height,
         hovermode="closest",
-        margin=dict(l=10, r=10, t=80, b=60),
+        margin=dict(l=10, r=30, t=80, b=80),
     )
     apply_dark_theme(fig)
     fig.update_xaxes(range=x_range, zeroline=False)

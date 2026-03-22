@@ -97,6 +97,13 @@ LAYOUT_DEFAULTS = dict(
 )
 
 
+def _hex_rgba(hex_color: str, alpha: float) -> str:
+    """Convert #RRGGBB hex color to rgba(r,g,b,alpha) string."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def _interp_box(title: str, text: str, purpose: str = "", effect: str = "") -> None:
     """통계 결과해석 박스 — render_insight_box 형식으로 통일"""
     from src.visualization._common import render_insight_box
@@ -246,12 +253,19 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
         with cols[i]:
             r2 = row.get("pseudo_r2", 0)
             status = row.get("status", "warn")
+            r2_grade = "양호" if r2 >= 0.2 else ("주의" if r2 >= 0.1 else "경고")
+            grade_color = "#4FD6A5" if r2 >= 0.2 else ("#FBB55C" if r2 >= 0.1 else "#FF8A9A")
 
+            # 앱명을 게이지 상단에 별도 표시 (잘림 방지)
+            st.markdown(
+                f'<div style="text-align:center;font-size:0.9rem;font-weight:700;'
+                f'color:{_TEXT};margin-bottom:4px;">{row["app_name"]}</div>',
+                unsafe_allow_html=True,
+            )
             fig_gauge = go.Figure(go.Indicator(
-                mode="gauge+number",
+                mode="gauge",
                 value=float(r2),
-                title={"text": f"{row['app_name']}<br>Pseudo R²",
-                       "font": {"size": 13, "color": _TEXT}},
+                title={"text": "Pseudo R²", "font": {"size": 13, "color": _TEXT}},
                 gauge={
                     "axis": {"range": [0, 0.4], "tickcolor": _TEXT,
                              "tickfont": {"color": _TEXT}},
@@ -265,18 +279,62 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
                     ],
                     "threshold": {"line": {"color": _TEXT, "width": 3}, "value": r2},
                 },
-                number={"valueformat": ".3f", "font": {"color": _TEXT}},
             ))
             fig_gauge.update_layout(
-                height=250,
+                height=200,
                 plot_bgcolor=_BG,
                 paper_bgcolor=_BG,
                 font=dict(color=_TEXT),
-                margin=dict(l=10, r=10, t=50, b=40),
+                margin=dict(l=20, r=20, t=40, b=10),
             )
             st.plotly_chart(fig_gauge, use_container_width=True)
             _chart_download_btn(fig_gauge, f"model_fit_gauge_{row['app_name']}")
+            st.markdown(
+                f'<div style="text-align:center;font-size:1.4rem;font-weight:700;'
+                f'color:{grade_color};margin-bottom:4px;">{r2:.3f}</div>',
+                unsafe_allow_html=True,
+            )
             st.markdown(_badge_html(status), unsafe_allow_html=True)
+            # 정량적 설명
+            st.markdown(
+                f'<div style="font-size:0.78rem;color:{_SUBTEXT};line-height:1.6;'
+                f'padding:6px 8px;background:{_GRID};border-radius:4px;margin-top:6px;">'
+                f'현재 R²=<b style="color:{grade_color};">{r2:.3f}</b> → <b style="color:{grade_color};">{r2_grade}</b><br>'
+                f'· &lt;0.1: 경고 (기능 키워드 설명력 낮음)<br>'
+                f'· 0.1~0.2: 주의 (기본 분석 가능)<br>'
+                f'· ≥0.2: 양호 (신뢰할 수 있는 수준)'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    # 토스·카카오페이·네이버페이 3앱 동시 분석 시 설명 문구
+    app_names_in_table = set(table["app_name"].tolist())
+    _TOSS_NAMES = {"토스", "Toss"}
+    _KAKAO_NAMES = {"카카오페이", "KakaoPay"}
+    _NAVER_NAMES = {"네이버페이", "NaverPay"}
+    has_toss  = bool(app_names_in_table & _TOSS_NAMES)
+    has_kakao = bool(app_names_in_table & _KAKAO_NAMES)
+    has_naver = bool(app_names_in_table & _NAVER_NAMES)
+    if has_toss and has_kakao and has_naver:
+        st.markdown(
+            '<div class="info-box" style="margin-top:10px;border-left:3px solid #4F8EF7;">'
+            '💡 <b>Pseudo R² 해석 참고:</b><br>'
+            '토스의 낮은 Pseudo R²(0.095)는 슈퍼앱 특성상 이용자 만족이 특정 기능보다 서비스 전반에 분산되어 있음을 시사한다. '
+            '반면 카카오페이(0.183)는 위젯·계좌조회 등 특정 기능의 만족도가 전반적 평점과 강하게 연관되는 집중적 패턴을 보인다.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    # 개선 방법 안내
+    st.markdown(
+        '<div class="info-box" style="margin-top:12px;">'
+        '📈 <b>모형 적합도를 높이려면:</b><br>'
+        '① 리뷰 수 확대 — 앱당 300건 이상 수집 시 안정적 수렴<br>'
+        '② 기능 카테고리 세분화 — 너무 광범위한 카테고리는 신호를 희석시킴<br>'
+        '③ 리뷰 기간 다양화 — 특정 이벤트 편향 없이 최소 3개월 이상 분포<br>'
+        '④ 불용어/노이즈 제거 강화 — 기능과 무관한 감탄사·이모지 토큰 정제</div>',
+        unsafe_allow_html=True,
+    )
 
     # AIC/BIC 막대 비교
     if len(table) > 1:
@@ -394,8 +452,20 @@ def _render_coef_sig(vr: dict[str, Any]) -> None:
     fig.add_vline(x=1.0, line_dash="dash", line_color=_SUBTEXT, line_width=1.5,
                   annotation_text="OR=1 기준", annotation_position="top right",
                   annotation_font_color=_SUBTEXT)
+
+    # 극단값 클리핑 — 상위 5% 이상치가 있으면 95th percentile 기준으로 x축 제한
+    clip_note = ""
+    if "ci_upper" in cs.columns and not cs["ci_upper"].dropna().empty:
+        upper_vals = cs["ci_upper"].dropna()
+        x_max_raw = float(upper_vals.max())
+        x_max_clip = float(np.percentile(upper_vals, 95)) * 1.15
+        x_min_clip = max(0.0, float(np.percentile(cs["ci_lower"].dropna(), 5)) * 0.85)
+        if x_max_raw > x_max_clip * 1.5:
+            fig.update_xaxes(range=[x_min_clip, x_max_clip])
+            clip_note = " (극단값 클리핑 적용 — hover로 실제값 확인)"
+
     fig.update_layout(
-        title=dict(text="기능 키워드별 오즈비 (Forest Plot) — 흐린 점 = 비유의(p≥0.05)",
+        title=dict(text=f"기능 키워드별 오즈비 (Forest Plot) — 흐린 점 = 비유의(p≥0.05){clip_note}",
                    x=0.5, xanchor="center", font=dict(color=_TEXT, size=14)),
         xaxis_title="오즈비 (OR)",
         height=max(350, len(cs["feature_category"].unique()) * 35 + 150),
@@ -457,6 +527,17 @@ def _render_interaction(vr: dict[str, Any], combined_or: pd.DataFrame) -> None:
     if not combined_or.empty and "delta_or" in combined_or.columns:
         delta_data = combined_or.dropna(subset=["delta_or"]).copy()
 
+        # p-value 기준 정렬 (유의한 것 상단) — lr_pvalue 기준, 없으면 delta_or 절대값 기준
+        cat_order = None
+        if not ia.empty and "feature_category" in ia.columns and "lr_pvalue" in ia.columns:
+            cat_pv = ia.set_index("feature_category")["lr_pvalue"]
+            # ascending=False → 큰 p(비유의)가 아래, 작은 p(유의)가 위
+            cat_order = cat_pv.sort_values(ascending=False).index.tolist()
+        else:
+            # delta_or 절대값 기준 — 큰 차이가 위
+            agg = delta_data.groupby("feature_category")["delta_or"].apply(lambda x: x.abs().max())
+            cat_order = agg.sort_values(ascending=True).index.tolist()
+
         fig = go.Figure()
         for i, app_name in enumerate(delta_data["app_name"].unique()):
             sub = delta_data[delta_data["app_name"] == app_name].copy()
@@ -470,33 +551,49 @@ def _render_interaction(vr: dict[str, Any], combined_or: pd.DataFrame) -> None:
             else:
                 sig_labels = [""] * len(sub)
 
-            bar_colors = [color if v >= 0 else "#EF4444" for v in sub["delta_or"]]
+            bar_colors = [
+                _hex_rgba(color, 0.90) if v >= 0 else _hex_rgba(color, 0.45)
+                for v in sub["delta_or"]
+            ]
             text = [f"{v:.3f} {s}" for v, s in zip(sub["delta_or"], sig_labels)]
 
             fig.add_trace(go.Bar(
                 name=app_name,
-                x=sub["feature_category"].tolist(),
-                y=sub["delta_or"].tolist(),
+                y=sub["feature_category"].tolist(),   # 수평 막대: y=카테고리
+                x=sub["delta_or"].tolist(),            # 수평 막대: x=값
+                orientation="h",
                 marker_color=bar_colors,
                 text=text,
                 textposition="outside",
-                textfont=dict(color=_TEXT),
+                textfont=dict(size=9, color=_TEXT),
                 hovertemplate=(
-                    f"<b>{app_name}</b><br>기능: %{{x}}<br>ΔOR: %{{y:.3f}}<br>"
+                    f"<b>{app_name}</b><br>기능: %{{y}}<br>ΔOR: %{{x:.3f}}<br>"
                     "양수=기준앱 대비 우위 / 음수=열위<extra></extra>"
                 ),
             ))
 
-        fig.add_hline(y=0, line_dash="dash", line_color=_SUBTEXT, line_width=1.5)
+        fig.add_vline(x=0, line_dash="dash", line_color=_SUBTEXT, line_width=1.5)
+        n_cats = len(delta_data["feature_category"].unique())
+
+        # 극단값 클리핑 — 90th percentile × 1.2 기준
+        abs_max = delta_data["delta_or"].abs().max() if not delta_data.empty else 1.0
+        clip_x = float(delta_data["delta_or"].abs().quantile(0.90)) * 1.2 if abs_max > 2 else abs_max
+        do_clip = bool(clip_x < abs_max * 0.9)
+        clip_note = f" (극단값 클리핑 ±{clip_x:.1f})" if do_clip else ""
+
         fig.update_layout(
-            title=dict(text="기능별 ΔOR 비교 (*** p<0.001 · ** p<0.01 · * p<0.05)",
+            title=dict(text=f"기능별 ΔOR 비교 (*** p<0.001 · ** p<0.01 · * p<0.05){clip_note}",
                        x=0.5, xanchor="center", font=dict(color=_TEXT, size=14)),
-            xaxis_title="기능 카테고리",
-            yaxis_title="ΔOR",
+            yaxis_title="기능 카테고리",
+            xaxis_title="ΔOR (양수=기준앱 우위, 음수=열위)",
             barmode="group",
-            height=420,
+            height=max(420, n_cats * 32 + 150),
             **LAYOUT_DEFAULTS,
         )
+        if cat_order:
+            fig.update_yaxes(categoryorder="array", categoryarray=cat_order)
+        if do_clip:
+            fig.update_xaxes(range=[-clip_x * 1.5, clip_x * 1.5])
         st.plotly_chart(fig, use_container_width=True)
         _chart_download_btn(fig, "delta_or_bar")
 
@@ -551,106 +648,109 @@ def _render_multicollinearity(vr: dict[str, Any]) -> None:
     </div>
     """, unsafe_allow_html=True)
 
-    col1, col2 = st.columns([3, 2])
+    # ── 상관계수 히트맵 (전체 너비) ───────────────────────────────────────────
+    st.markdown("**상관계수 히트맵** (0.7 이상은 주의)")
+    if not corr_matrix.empty:
+        n_feats = len(corr_matrix)
+        fig_h = max(6, n_feats * 0.35)
+        fig_w = max(8, n_feats * 0.4)
+        fig_corr, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor=_BG)
+        ax.set_facecolor(_BG)
+        mask = np.zeros_like(corr_matrix, dtype=bool)
+        mask[np.triu_indices_from(mask, k=1)] = True
 
-    with col1:
-        st.markdown("**상관계수 히트맵** (0.7 이상은 주의)")
-        if not corr_matrix.empty:
-            fig_corr, ax = plt.subplots(figsize=(8, 6), facecolor=_BG)
-            ax.set_facecolor(_BG)
-            mask = np.zeros_like(corr_matrix, dtype=bool)
-            mask[np.triu_indices_from(mask, k=1)] = True
+        sns.heatmap(
+            corr_matrix,
+            ax=ax,
+            annot=True,
+            fmt=".2f",
+            cmap="RdYlGn_r",
+            vmin=-1,
+            vmax=1,
+            mask=mask,
+            linewidths=0.5,
+            annot_kws={"size": 7},   # 색상 미지정 → matplotlib이 배경에 맞게 자동 대비
+            linecolor=_GRID,
+        )
+        ax.tick_params(colors=_TEXT, labelsize=8)
+        ax.xaxis.label.set_color(_TEXT)
+        ax.yaxis.label.set_color(_TEXT)
+        for spine in ax.spines.values():
+            spine.set_edgecolor(_LINE)
 
-            sns.heatmap(
-                corr_matrix,
-                ax=ax,
-                annot=True,
-                fmt=".2f",
-                cmap="RdYlGn_r",
-                vmin=-1,
-                vmax=1,
-                mask=mask,
-                linewidths=0.5,
-                annot_kws={"size": 7, "color": _TEXT},
-                linecolor=_GRID,
-            )
-            ax.tick_params(colors=_TEXT)
-            ax.xaxis.label.set_color(_TEXT)
-            ax.yaxis.label.set_color(_TEXT)
-            for spine in ax.spines.values():
-                spine.set_edgecolor(_LINE)
+        for i in range(len(corr_matrix)):
+            for j in range(i):
+                val = corr_matrix.iloc[i, j]
+                if abs(val) >= 0.7:
+                    ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False,
+                                               edgecolor="#FF6B8A", lw=2.5))
 
-            for i in range(len(corr_matrix)):
-                for j in range(i):
-                    val = corr_matrix.iloc[i, j]
-                    if abs(val) >= 0.7:
-                        ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False,
-                                                   edgecolor="#FF6B8A", lw=2.5))
+        ax.set_title("기능 키워드 간 상관계수", fontsize=12, pad=10, color=_TEXT)
+        plt.tight_layout()
 
-            ax.set_title("기능 키워드 간 상관계수", fontsize=12, pad=10, color=_TEXT)
-            plt.tight_layout()
+        buf = io.BytesIO()
+        fig_corr.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor=_BG)
+        plt.close(fig_corr)
+        buf.seek(0)
+        img_bytes = buf.read()
+        st.image(img_bytes, use_container_width=True)
 
-            buf = io.BytesIO()
-            fig_corr.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor=_BG)
-            plt.close(fig_corr)
-            buf.seek(0)
-            st.image(buf.read(), use_container_width=True)
+        st.download_button(
+            "📥 히트맵 이미지 다운로드",
+            data=img_bytes,
+            file_name=f"multicollinearity_heatmap_{datetime.now().strftime('%Y%m%d')}.png",
+            mime="image/png",
+            key="dl_corr_heatmap",
+        )
+    else:
+        st.info("상관계수 계산에 필요한 데이터가 부족합니다.")
 
-            buf.seek(0)
-            st.download_button(
-                "📥 히트맵 이미지 다운로드",
-                data=buf.read(),
-                file_name=f"multicollinearity_heatmap_{datetime.now().strftime('%Y%m%d')}.png",
-                mime="image/png",
-                key="dl_corr_heatmap",
-            )
-        else:
-            st.info("상관계수 계산에 필요한 데이터가 부족합니다.")
+    st.markdown("---")
 
-    with col2:
-        st.markdown("**VIF (분산 팽창 지수)**")
-        if not vif_table.empty:
-            vif_colors = []
-            for _, row in vif_table.iterrows():
-                v = row.get("vif", 0)
-                vif_colors.append("#EF4444" if v >= 10 else "#F59E0B" if v >= 5 else "#10B981")
+    # ── VIF 분산 팽창 지수 (히트맵 아래 전체 너비) ────────────────────────────
+    st.markdown("**VIF (분산 팽창 지수)**")
+    if not vif_table.empty:
+        vif_colors = []
+        for _, row in vif_table.iterrows():
+            v = row.get("vif", 0)
+            vif_colors.append("#EF4444" if v >= 10 else "#F59E0B" if v >= 5 else "#10B981")
 
-            fig_vif = go.Figure(go.Bar(
-                y=vif_table["feature_category"].tolist(),
-                x=vif_table["vif"].tolist(),
-                orientation="h",
-                marker_color=vif_colors,
-                hovertemplate="<b>%{y}</b><br>VIF: %{x:.2f}<br>10 미만이면 양호해요<extra></extra>",
-            ))
-            fig_vif.add_vline(x=5,  line_dash="dot", line_color="#F59E0B",
-                              annotation_text="주의(5)", annotation_position="top right",
-                              annotation_font_color="#F59E0B")
-            fig_vif.add_vline(x=10, line_dash="dot", line_color="#EF4444",
-                              annotation_text="경고(10)", annotation_position="top right",
-                              annotation_font_color="#EF4444")
-            fig_vif.update_layout(
-                title=dict(text="VIF (낮을수록 독립적)", x=0.5, xanchor="center", font=dict(color=_TEXT)),
-                xaxis_title="VIF",
-                height=max(300, len(vif_table) * 30 + 100),
-                **LAYOUT_DEFAULTS,
-            )
-            st.plotly_chart(fig_vif, use_container_width=True)
-            _chart_download_btn(fig_vif, "vif_bar")
+        fig_vif = go.Figure(go.Bar(
+            y=vif_table["feature_category"].tolist(),
+            x=vif_table["vif"].tolist(),
+            orientation="h",
+            marker_color=vif_colors,
+            hovertemplate="<b>%{y}</b><br>VIF: %{x:.2f}<br>10 미만이면 양호해요<extra></extra>",
+        ))
+        fig_vif.add_vline(x=5,  line_dash="dot", line_color="#F59E0B",
+                          annotation_text="주의(5)", annotation_position="top right",
+                          annotation_font_color="#F59E0B")
+        fig_vif.add_vline(x=10, line_dash="dot", line_color="#EF4444",
+                          annotation_text="경고(10)", annotation_position="top right",
+                          annotation_font_color="#EF4444")
+        fig_vif.update_layout(
+            title=dict(text="VIF (낮을수록 독립적)", x=0.5, xanchor="center", font=dict(color=_TEXT)),
+            xaxis_title="VIF",
+            height=max(300, len(vif_table) * 28 + 100),
+            **LAYOUT_DEFAULTS,
+        )
+        st.plotly_chart(fig_vif, use_container_width=True)
+        _chart_download_btn(fig_vif, "vif_bar")
 
-            worst = "fail" if "fail" in vif_table["status"].values else ("warn" if "warn" in vif_table["status"].values else "pass")
-            st.markdown(_badge_html(worst), unsafe_allow_html=True)
+        worst = "fail" if "fail" in vif_table["status"].values else ("warn" if "warn" in vif_table["status"].values else "pass")
+        st.markdown(_badge_html(worst), unsafe_allow_html=True)
 
-            # VIF 해석
-            max_vif_row = vif_table.loc[vif_table["vif"].idxmax()]
-            high_vif = vif_table[vif_table["vif"] >= 5]
-            _interp_box(
-                "VIF (분산 팽창 지수)",
-                f"최대 VIF: <b>{max_vif_row['feature_category']}</b> (VIF={max_vif_row['vif']:.2f}). "
-                f"{'주의 수준(VIF≥5) 변수: ' + ', '.join(high_vif['feature_category'].tolist()) + '. ' if not high_vif.empty else '모든 변수가 양호 수준(VIF<5)입니다. '}"
-                f"VIF<10이면 다중공선성이 심각하지 않아 분석 결과를 신뢰할 수 있습니다.",
-            )
-        else:
-            st.info("VIF 계산에 필요한 데이터가 부족합니다.")
+        # VIF 해석
+        max_vif_row = vif_table.loc[vif_table["vif"].idxmax()]
+        high_vif = vif_table[vif_table["vif"] >= 5]
+        _interp_box(
+            "VIF (분산 팽창 지수)",
+            f"최대 VIF: <b>{max_vif_row['feature_category']}</b> (VIF={max_vif_row['vif']:.2f}). "
+            f"{'주의 수준(VIF≥5) 변수: ' + ', '.join(high_vif['feature_category'].tolist()) + '. ' if not high_vif.empty else '모든 변수가 양호 수준(VIF<5)입니다. '}"
+            f"VIF<10이면 다중공선성이 심각하지 않아 분석 결과를 신뢰할 수 있습니다.",
+        )
+    else:
+        st.info("VIF 계산에 필요한 데이터가 부족합니다.")
 
     _thesis_box(
         "기능 키워드 간 다중공선성을 VIF로 점검하였으며, 모든 변수의 VIF가 10 미만으로 "
@@ -681,12 +781,15 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
         raw_stats: dict = vr.get("raw_stats", {})
         MIN_NEEDED = 50
         rows = []
+        all_sufficient = True
         for app_name, st_data in raw_stats.items():
             total = st_data.get("total", 0)
             pos   = st_data.get("pos",   0)
             neg   = st_data.get("neg",   0)
             usable = min(pos, neg)
             ok = "✅" if usable >= MIN_NEEDED else "⚠️"
+            if usable < MIN_NEEDED:
+                all_sufficient = False
             rows.append(
                 f"{ok} <b>{app_name}</b>: 전체 {total:,}건 "
                 f"(긍정 {pos:,} / 부정 {neg:,}) — "
@@ -694,14 +797,25 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
                 f"[필요: 최소 {MIN_NEEDED}건 {'충족' if usable >= MIN_NEEDED else f'— {MIN_NEEDED - usable}건 부족'}]"
             )
         detail = "<br>".join(rows) if rows else "수집된 리뷰 데이터가 없습니다."
-        st.markdown(
-            f'<div class="info-box" style="border-left:4px solid #F59E0B;">'
-            f'⚠️ <b>민감도 분석을 위한 데이터가 충분하지 않습니다.</b><br>'
-            f'3점 이분화 조건을 바꾸며 로지스틱 회귀를 재실행하려면 각 앱당 <b>긍정·부정 리뷰 각 {MIN_NEEDED}건 이상</b>이 필요합니다.<br><br>'
-            f'{detail}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        if all_sufficient and raw_stats:
+            # 데이터는 충분하지만 분석 실패 → 다시 실행 시도 또는 오류 안내
+            st.markdown(
+                f'<div class="info-box" style="border-left:4px solid #F59E0B;">'
+                f'⚠️ <b>분석 조건은 충족되었으나 민감도 분석을 완료하지 못했습니다.</b><br>'
+                f'리뷰 데이터를 다시 분석하거나 앱을 재선택하면 해결될 수 있습니다.<br><br>'
+                f'{detail}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="info-box" style="border-left:4px solid #F59E0B;">'
+                f'⚠️ <b>민감도 분석을 위한 데이터가 충분하지 않습니다.</b><br>'
+                f'3점 이분화 조건을 바꾸며 로지스틱 회귀를 재실행하려면 각 앱당 <b>긍정·부정 리뷰 각 {MIN_NEEDED}건 이상</b>이 필요합니다.<br><br>'
+                f'{detail}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
         return
 
     conditions = combined["condition"].unique().tolist() if "condition" in combined.columns else []
@@ -833,7 +947,7 @@ def _render_period_stability(vr: dict[str, Any]) -> None:
             y=heat_data.index.tolist(),
             colorscale="RdYlGn",
             zmid=1.0,
-            colorbar=dict(title="OR", tickfont=dict(color=_TEXT), titlefont=dict(color=_TEXT)),
+            colorbar=dict(title=dict(text="OR", font=dict(color=_TEXT)), tickfont=dict(color=_TEXT)),
             hovertemplate="기능: %{y}<br>기간: %{x}<br>OR: %{z:.3f}<br>1 기준 위=긍정 연관, 아래=부정 연관<extra></extra>",
             text=heat_data.round(2).values.tolist(),
             texttemplate="%{text}",
@@ -910,7 +1024,7 @@ def _render_sample_distribution(vr: dict[str, Any]) -> None:
     monthly      = sd.get("monthly",      pd.DataFrame())
     imbalance    = sd.get("imbalance_status", {})
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
 
     # 평점 분포 막대 차트
     with col1:
@@ -992,14 +1106,15 @@ def _render_sample_distribution(vr: dict[str, Any]) -> None:
                 ". 특정 월에 리뷰가 급증했다면 업데이트나 이벤트 등 외부 요인을 검토하세요.",
             )
 
-    # 긍정/부정 도넛 차트
-    with col3:
-        st.markdown("**긍정/부정 비율**")
-        if not sentiment_df.empty:
-            apps = sentiment_df["app_name"].unique().tolist() if "app_name" in sentiment_df.columns else []
-            donut_interp_lines = []
-            for app_name in apps[:2]:
-                sub = sentiment_df[sentiment_df["app_name"] == app_name]
+    # 긍정/부정 도넛 차트 (full width, below)
+    st.markdown("**긍정/부정 비율**")
+    if not sentiment_df.empty:
+        apps = sentiment_df["app_name"].unique().tolist() if "app_name" in sentiment_df.columns else []
+        donut_cols = st.columns(max(1, len(apps[:4])))
+        donut_interp_lines = []
+        for idx, app_name in enumerate(apps[:4]):
+            sub = sentiment_df[sentiment_df["app_name"] == app_name]
+            with donut_cols[idx]:
                 fig_donut = go.Figure(go.Pie(
                     labels=sub["sentiment"].tolist(),
                     values=sub["count"].tolist(),
@@ -1013,7 +1128,7 @@ def _render_sample_distribution(vr: dict[str, Any]) -> None:
                         text=f"{app_name} {_badge_html(status)}",
                         font=dict(color=_TEXT),
                     ),
-                    height=250,
+                    height=280,
                     plot_bgcolor=_BG,
                     paper_bgcolor=_BG,
                     font=dict(color=_TEXT),
@@ -1023,18 +1138,18 @@ def _render_sample_distribution(vr: dict[str, Any]) -> None:
                 st.plotly_chart(fig_donut, use_container_width=True)
                 _chart_download_btn(fig_donut, f"sentiment_donut_{app_name}")
 
-                total = sub["count"].sum()
-                for _, row in sub.iterrows():
-                    if "긍정" in str(row.get("sentiment", "")):
-                        pct = row["count"] / total * 100 if total > 0 else 0
-                        donut_interp_lines.append(f"<b>{app_name}</b> 긍정 비율 {pct:.0f}%")
-            if donut_interp_lines:
-                _interp_box(
-                    "긍정/부정 비율",
-                    " | ".join(donut_interp_lines) +
-                    ". 긍정·부정 비율이 9:1 이상으로 극단적이면 OR 분석의 신뢰도가 낮아질 수 있습니다. "
-                    "⚠️ 주의 표시된 앱은 데이터 불균형 보정 여부를 검토하세요.",
-                )
+            total = sub["count"].sum()
+            for _, row in sub.iterrows():
+                if "긍정" in str(row.get("sentiment", "")):
+                    pct = row["count"] / total * 100 if total > 0 else 0
+                    donut_interp_lines.append(f"<b>{app_name}</b> 긍정 비율 {pct:.0f}%")
+        if donut_interp_lines:
+            _interp_box(
+                "긍정/부정 비율",
+                " | ".join(donut_interp_lines) +
+                ". 긍정·부정 비율이 9:1 이상으로 극단적이면 OR 분석의 신뢰도가 낮아질 수 있습니다. "
+                "⚠️ 주의 표시된 앱은 데이터 불균형 보정 여부를 검토하세요.",
+            )
 
     if not app_counts.empty:
         st.markdown("**앱별 수집 건수 요약**")

@@ -26,6 +26,7 @@ from src.visualization import (
     tab_review, tab_keyword, tab_odds, tab_priority, tab_validation,
     single_view, compare_view,
 )
+from src.visualization._common import get_icon_color
 
 # ── 페이지 설정 ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -59,10 +60,10 @@ _APP_COLORS = ["#4F8EF7", "#F7844F", "#4FD6A5", "#C84FF7", "#F7D84F"]
 
 # 결과 탭 목록
 _RESULT_TABS = [
-    ("📊", "단일/비교 분석"),
-    ("📋", "Review Explorer"),
-    ("☁️", "Keyword Cloud"),
-    ("📈", "Odds Ratio"),
+    ("📊", "분석 Summary"),
+    ("📋", "리뷰 원본 데이터"),
+    ("☁️", "키워드 탐색"),
+    ("📈", "오즈비 분석"),
     ("🔬", "통계 검증"),
 ]
 
@@ -199,7 +200,7 @@ def _render_sidebar():
                 unsafe_allow_html=True,
             )
             for ui, app in enumerate(unique_apps):
-                color = _APP_COLORS[ui % len(_APP_COLORS)]
+                color = get_icon_color(getattr(app, "icon_url", ""), _APP_COLORS[ui % len(_APP_COLORS)])
                 # 어떤 플랫폼이 포함됐는지 확인
                 plats = {a.platform for a in apps if a.app_name == app.app_name}
                 has_android = "Google Play Store" in plats
@@ -602,9 +603,9 @@ def _page_result():
     # 사이드바 탭 클릭 시 해당 탭으로 자동 이동
     active_tab = st.session_state.pop("_active_tab", 0)
 
-    view_label = "📊 비교 분석" if is_compare else "📊 단일 분석"
+    view_label = "📊 분석 Summary"
     view_tab, review_tab, kw_tab, or_tab, valid_tab = st.tabs([
-        view_label, "📋 Review Explorer", "☁️ Keyword Cloud", "📈 Odds Ratio", "🔬 통계 검증",
+        view_label, "📋 리뷰 원본 데이터", "☁️ 키워드 탐색", "📈 오즈비 분석", "🔬 통계 검증",
     ])
 
     if active_tab > 0:

@@ -438,16 +438,16 @@ def run_all_validations(
     except Exception as e:
         result["multicol"] = {"corr_matrix": pd.DataFrame(), "vif_table": pd.DataFrame()}
 
-    # 5. 민감도 분석 (임계값)
+    # 5. 민감도 분석 (임계값) — processed_df 사용 (feature binary 컬럼 필요)
     try:
-        sens = compute_threshold_sensitivity(raw_df, feature_cols)
+        sens = compute_threshold_sensitivity(processed_df, feature_cols)
         result["threshold_sens"] = sens if isinstance(sens, tuple) else (pd.DataFrame(), pd.DataFrame())
     except Exception as e:
         result["threshold_sens"] = (pd.DataFrame(), pd.DataFrame())
 
-    # 6. 기간 분할 안정성
+    # 6. 기간 분할 안정성 — processed_df 사용 (feature binary 컬럼 필요)
     try:
-        result["period_stab"] = compute_period_stability(raw_df, feature_cols)
+        result["period_stab"] = compute_period_stability(processed_df, feature_cols)
     except Exception as e:
         result["period_stab"] = (pd.DataFrame(), pd.DataFrame())
 

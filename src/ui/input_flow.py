@@ -58,11 +58,20 @@ def render_controls_bar() -> None:
         _pe = st.session_state.pop("pending_end")
         st.session_state["start_date"] = _ps
         st.session_state["end_date"]   = _pe
-        st.session_state["date_start"] = _ps   # 위젯 값 직접 덮어씀
+        # date_start/date_end 키는 위젯이 직접 관리 — value= 충돌 방지를 위해 제거 후 재초기화
+        st.session_state.pop("date_start", None)
+        st.session_state.pop("date_end",   None)
+        st.session_state["date_start"] = _ps
         st.session_state["date_end"]   = _pe
 
     start_date: date = st.session_state.get("start_date", today - timedelta(days=30))
     end_date: date   = st.session_state.get("end_date", today)
+
+    # 위젯 키 미초기화 시 기본값 설정 (value= 파라미터 없이 key= 만 사용하기 위함)
+    if "date_start" not in st.session_state:
+        st.session_state["date_start"] = start_date
+    if "date_end" not in st.session_state:
+        st.session_state["date_end"] = end_date
     selected_platforms: list[str] = st.session_state.get("selected_platforms", ["Google Play Store"])
 
     st.markdown("""
@@ -130,7 +139,7 @@ def render_controls_bar() -> None:
         dc1, dc2, dc3 = st.columns([5, 1, 5])
         with dc1:
             new_start = st.date_input(
-                "시작일", value=start_date,
+                "시작일",
                 max_value=today, key="date_start",
                 label_visibility="collapsed",
             )
@@ -141,7 +150,7 @@ def render_controls_bar() -> None:
             )
         with dc3:
             new_end = st.date_input(
-                "종료일", value=end_date,
+                "종료일",
                 max_value=today, key="date_end",
                 label_visibility="collapsed",
             )
@@ -250,18 +259,22 @@ def render_date_range() -> tuple[date, date, bool]:
                 st.session_state.pop("date_end",   None)
                 st.rerun()
 
+    # 위젯 키 미초기화 시 기본값 설정
+    if "date_start" not in st.session_state:
+        st.session_state["date_start"] = st.session_state.get("start_date", today - timedelta(days=365))
+    if "date_end" not in st.session_state:
+        st.session_state["date_end"] = st.session_state.get("end_date", today)
+
     col1, col2 = st.columns(2)
     with col1:
         start = st.date_input(
             "시작일",
-            value=st.session_state.get("date_start", today - timedelta(days=365)),
             max_value=today,
             key="date_start",
         )
     with col2:
         end = st.date_input(
             "종료일",
-            value=st.session_state.get("date_end", today),
             max_value=today,
             key="date_end",
         )

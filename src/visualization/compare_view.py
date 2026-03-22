@@ -28,8 +28,8 @@ from src.visualization.tab_priority import _build_scatter
 from src.visualization._common import (
     BG, GRID, LINE, TEXT, SUBTEXT,
     apply_dark_theme, centered_title,
-    get_ordered_app_names, app_color, app_emoji, render_insight_box,
-    APP_COLOR_EMOJIS,
+    get_ordered_app_names, app_color, render_insight_box,
+    app_icon_html,
 )
 
 _BUNDLED_FONT = ASSETS_DIR / "fonts" / "NanumGothic.ttf"
@@ -234,7 +234,7 @@ def _render_vs_kpi_section(raw_df: pd.DataFrame, app_names: list[str]) -> None:
 
     for i, app_name in enumerate(app_names):
         color = app_color(app_name, app_names)
-        emoji = APP_COLOR_EMOJIS.get(color, "⬜")
+        icon_img = app_icon_html(app_name, size=22, color=color)
         app_df = raw_df[raw_df["app_name"] == app_name] if "app_name" in raw_df.columns else raw_df.iloc[0:0]
         total  = len(app_df)
 
@@ -253,7 +253,7 @@ def _render_vs_kpi_section(raw_df: pd.DataFrame, app_names: list[str]) -> None:
             st.markdown(
                 f'<div style="text-align:center;padding:10px;border-radius:8px;'
                 f'background:{color}22;border:2px solid {color};margin-bottom:10px;">'
-                f'<b style="font-size:1rem;color:{color};">{emoji} {app_name}</b></div>',
+                f'<b style="font-size:1rem;color:{color};">{icon_img} {app_name}</b></div>',
                 unsafe_allow_html=True,
             )
             # KPI 데이터
@@ -404,7 +404,7 @@ def _render_wc_sections(proc: pd.DataFrame, app_names: list[str]) -> None:
         all_tops = {an: counters[an].most_common(1)[0][0] for an in app_names if counters[an]}
         if len(all_tops) >= 2:
             top_str = " / ".join(
-                f"{app_emoji(an, app_names)}{an}: <b>{w}</b>"
+                f"{app_icon_html(an, size=14, color=app_color(an, app_names))}<b style='color:{app_color(an, app_names)};'>{an}</b>: <b>{w}</b>"
                 for an, w in all_tops.items()
             )
             # 공통 top5 키워드 여부 파악
@@ -427,7 +427,26 @@ def _render_wc_sections(proc: pd.DataFrame, app_names: list[str]) -> None:
 
 # ── 섹션 4: OR 비교 ───────────────────────────────────────────────────────────
 
-def _or_dot_plot(combined: pd.DataFrame, app_names: list[str], use_log: bool = False) -> go.Figure:
+def _or_dot_plot(
+    combined: pd.DataFrame,
+    app_names: list[str],
+    use_log: bool = False,
+    title: str = "기능 카테고리별 오즈비(OR) 비교",
+    all_app_names: list[str] | None = None,
+) -> go.Figure:
+    """오즈비 도트 플롯.
+
+    Parameters
+    ----------
+    combined : 플롯할 데이터 (app_name 필터 이미 적용된 상태여도 됨)
+    app_names : 이 플롯에 표시할 앱 이름 목록
+    use_log : 로그 스케일 여부
+    title : 차트 제목
+    all_app_names : 전체 앱 목록 (색상 일관성 유지용). None이면 app_names 사용
+    """
+    if all_app_names is None:
+        all_app_names = app_names
+
     fig = go.Figure()
 
     # 로그 스케일 시 OR=0 방지 (log(0)=-inf)
@@ -437,47 +456,124 @@ def _or_dot_plot(combined: pd.DataFrame, app_names: list[str], use_log: bool = F
         plot_combined["ci_lower"] = plot_combined["ci_lower"].clip(lower=0.01)
         plot_combined["ci_upper"] = plot_combined["ci_upper"].clip(lower=0.01)
 
+    # p-value 기준 카테고리 정렬 (유의한 것 상단)
+    if "p_value" in plot_combined.columns:
+        cat_pval = plot_combined.groupby("feature_category")["p_value"].min()
+        sorted_cats = cat_pval.sort_values(ascending=False).index.tolist()
+    else:
+        cat_pval = pd.Series(dtype=float)
+        sorted_cats = plot_combined["feature_category"].unique().tolist()
+
     for app_name in app_names:
         app_df = plot_combined[plot_combined["app_name"] == app_name].copy()
         if app_df.empty:
             continue
-        color = app_color(app_name, app_names)
-        fig.add_trace(go.Scatter(
-            x=app_df["OR"],
-            y=app_df["feature_category"],
-            mode="markers",
-            name=app_name,
-            marker=dict(color=color, size=10, symbol="circle"),
-            error_x=dict(
-                type="data", symmetric=False,
-                array=(app_df["ci_upper"] - app_df["OR"]).tolist(),
-                arrayminus=(app_df["OR"] - app_df["ci_lower"]).tolist(),
-                color=color, thickness=1.5, width=5,
-            ),
-            hovertemplate=(
-                f"<b>{app_name}</b><br>기능: %{{y}}<br>OR: %{{x:.3f}}<br>"
-                "95% CI: [%{customdata[0]:.3f}, %{customdata[1]:.3f}]<br>"
-                "p-value: %{customdata[2]:.4f}<extra></extra>"
-            ),
-            customdata=app_df[["ci_lower", "ci_upper", "p_value"]].values,
-        ))
+        color = app_color(app_name, all_app_names)
 
-    vline_x = 1.0
-    fig.add_vline(x=vline_x, line_dash="dash", line_color=SUBTEXT, line_width=1.5,
+        # 유의/비유의 분리
+        if "p_value" in app_df.columns:
+            sig_df  = app_df[app_df["p_value"] < 0.05]
+            nsig_df = app_df[app_df["p_value"] >= 0.05]
+        else:
+            sig_df, nsig_df = app_df, pd.DataFrame(columns=app_df.columns)
+
+        # ── 유의 (p<0.05): 실선 오차막대 + 채운 마커 ─────────────────────────
+        if not sig_df.empty:
+            fig.add_trace(go.Scatter(
+                x=sig_df["OR"],
+                y=sig_df["feature_category"],
+                mode="markers",
+                name=app_name,
+                showlegend=True,
+                marker=dict(color=color, size=10, symbol="circle", opacity=1.0),
+                error_x=dict(
+                    type="data", symmetric=False,
+                    array=(sig_df["ci_upper"] - sig_df["OR"]).tolist(),
+                    arrayminus=(sig_df["OR"] - sig_df["ci_lower"]).tolist(),
+                    color=color, thickness=1.5, width=5,
+                ),
+                hovertemplate=(
+                    f"<b>{app_name}</b><br>기능: %{{y}}<br>OR: %{{x:.3f}}<br>"
+                    "95% CI: [%{customdata[0]:.3f}, %{customdata[1]:.3f}]<br>"
+                    "p-value: %{customdata[2]:.4f}<extra></extra>"
+                ),
+                customdata=sig_df[["ci_lower", "ci_upper", "p_value"]].values,
+            ))
+
+        # ── 비유의 (p≥0.05): 점선 CI + 빈 마커 ──────────────────────────────
+        if not nsig_df.empty:
+            xs, ys = [], []
+            for _, row in nsig_df.iterrows():
+                xs.extend([row["ci_lower"], row["ci_upper"], None])
+                ys.extend([row["feature_category"], row["feature_category"], None])
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys,
+                mode="lines",
+                line=dict(color=color, dash="dot", width=1.5),
+                opacity=0.45,
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+            fig.add_trace(go.Scatter(
+                x=nsig_df["OR"],
+                y=nsig_df["feature_category"],
+                mode="markers",
+                name=app_name,
+                showlegend=False,
+                marker=dict(
+                    color="rgba(0,0,0,0)",
+                    line=dict(color=color, width=1.5),
+                    size=9, symbol="circle-open", opacity=0.5,
+                ),
+                hovertemplate=(
+                    f"<b>{app_name}</b> (n.s.)<br>기능: %{{y}}<br>OR: %{{x:.3f}}<br>"
+                    "95% CI: [%{customdata[0]:.3f}, %{customdata[1]:.3f}]<br>"
+                    "p-value: %{customdata[2]:.4f}<extra></extra>"
+                ),
+                customdata=nsig_df[["ci_lower", "ci_upper", "p_value"]].values,
+            ))
+
+    fig.add_vline(x=1.0, line_dash="dash", line_color=SUBTEXT, line_width=1.5,
                   annotation_text="OR=1 (기준)", annotation_position="top right",
                   annotation_font_color=SUBTEXT)
 
-    n_cats = len(combined["feature_category"].unique())
+    n_cats = len(plot_combined["feature_category"].unique())
     fig.update_layout(
-        title=centered_title("기능 카테고리별 오즈비(OR) 비교"),
+        title=centered_title(title),
         xaxis_title="오즈비 (OR, 로그 스케일)" if use_log else "오즈비 (OR)",
-        yaxis_title="기능 카테고리",
-        height=max(400, n_cats * 35 + 150),
+        yaxis_title="",
+        height=max(400, n_cats * 38 + 150),
         hovermode="closest",
-        # 범례를 차트 하단으로 이동 → 타이틀과 겹침 해소
-        margin=dict(l=10, r=10, t=70, b=80),
+        margin=dict(l=240, r=10, t=70, b=80),
     )
     apply_dark_theme(fig, centered_legend=False)
+
+    # Y축: tick label 숨기고 annotation으로 대체 (p-value 색상 구분)
+    fig.update_yaxes(
+        categoryorder="array",
+        categoryarray=sorted_cats,
+        showticklabels=False,
+        zeroline=False,
+    )
+    for cat in sorted_cats:
+        pval = cat_pval.get(cat) if len(cat_pval) > 0 else None
+        if pval is not None:
+            star = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else "n.s."
+            p_str = "p<0.001" if pval < 0.001 else f"p={pval:.3f}"
+            label = f"{cat}  ({p_str} {star})"
+            font_color = TEXT if pval < 0.05 else SUBTEXT
+        else:
+            label = cat
+            font_color = TEXT
+        fig.add_annotation(
+            x=-0.01, xref="paper", xanchor="right",
+            y=cat, yref="y",
+            text=label,
+            showarrow=False,
+            font=dict(size=10, color=font_color),
+            align="right",
+        )
+
     fig.update_layout(legend=dict(
         bgcolor="#131820", bordercolor=LINE, font=dict(color=TEXT),
         orientation="h", yanchor="top", y=-0.08,
@@ -488,8 +584,26 @@ def _or_dot_plot(combined: pd.DataFrame, app_names: list[str], use_log: bool = F
     return fig
 
 
-def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: pd.DataFrame) -> None:
-    or_names = [n for n in app_names if n in combined_or["app_name"].values]
+def _render_or_section(
+    combined_or: pd.DataFrame,
+    app_names: list[str],
+    raw_df: pd.DataFrame,
+    or_results: dict[str, pd.DataFrame] | None = None,
+) -> None:
+    # or_results에 있지만 combined_or에 없는 앱 데이터 보완
+    combined_or = combined_or.copy() if not combined_or.empty else pd.DataFrame()
+    if or_results:
+        for _app, _df in or_results.items():
+            if _df.empty:
+                continue
+            already = (not combined_or.empty and "app_name" in combined_or.columns
+                       and _app in combined_or["app_name"].values)
+            if not already:
+                extra = _df.copy()
+                extra["app_name"] = _app
+                combined_or = pd.concat([combined_or, extra], ignore_index=True) if not combined_or.empty else extra
+
+    or_names = [n for n in app_names if not combined_or.empty and n in combined_or["app_name"].values]
     if not or_names:
         # OR 데이터 없음 — 부족한 이유 안내
         min_reviews = {
@@ -551,6 +665,24 @@ def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: 
         unsafe_allow_html=True,
     )
 
+    with st.expander("📐 분석 방법론 — OR 계산 방식 안내", expanded=False):
+        st.markdown("""
+        #### 왜 두 가지 분석 방법을 사용하나요?
+
+        | 언급 리뷰 수 | 적용 방법 | 이유 |
+        |---|---|---|
+        | **10건 이상** | 로지스틱 회귀 (Logistic Regression) | 충분한 표본 → 통제변수(리뷰 길이·업데이트 여부) 포함, 다변량 추정 |
+        | **2~9건** | 피셔 정확검정 (Fisher's Exact Test) | 소표본 → 로지스틱 회귀 수렴 불가, 역학 연구 표준 방법으로 대체 |
+
+        앱 리뷰에서는 특정 기능을 직접 언급하는 리뷰 수가 적은 경우가 흔합니다.
+        이때 로지스틱 회귀는 모델 수렴 실패 또는 완전 분리 문제(언급 리뷰가 모두 긍정/부정)로
+        결과를 내지 못합니다. **피셔 정확검정**은 2×2 분할표 기반으로 소표본에서도
+        정확한 OR·p-value를 계산하며, Haldane-Anscombe 보정(빈 셀 +0.5)을 적용합니다.
+
+        > ⚠️ 피셔 검정 OR은 통제변수가 미포함되므로 로지스틱 회귀 OR과 직접 수치 비교 시 유의해야 합니다.
+        > 상세 테이블의 **분석방법** 컬럼에서 각 카테고리의 적용 방법을 확인할 수 있습니다.
+        """)
+
     use_log = suggest_log  # 극단값 존재 시 기본으로 로그 스케일 적용
     if suggest_log:
         use_log = st.checkbox(
@@ -559,26 +691,79 @@ def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: 
             key="or_log_scale",
         )
 
-    st.plotly_chart(_or_dot_plot(combined_or, or_names, use_log=use_log), use_container_width=True)
+    # ── 공통 feature_category 계산 ─────────────────────────────────────────
+    per_app_cats = [
+        set(combined_or[combined_or["app_name"] == an]["feature_category"].unique())
+        for an in or_names
+    ]
+    common_cats: set[str] = per_app_cats[0].intersection(*per_app_cats[1:]) if len(per_app_cats) > 1 else per_app_cats[0]
 
-    # OR 상세 테이블
+    # ── 앱별 개별 도트 플롯 (1×1 배열) ────────────────────────────────────
+    st.markdown("##### 앱별 오즈비 (OR) 비교")
+    st.caption(
+        f"각 앱의 기능별 OR을 독립적으로 표시합니다. "
+        f"아래 '공통 기능 비교' 차트에서 {len(or_names)}개 앱을 한눈에 비교할 수 있습니다."
+    )
+    for app_name in or_names:
+        app_df = combined_or[combined_or["app_name"] == app_name]
+        if app_df.empty:
+            st.warning(f"{app_name}: OR 데이터 없음")
+            continue
+        st.plotly_chart(
+            _or_dot_plot(
+                app_df, [app_name], use_log=use_log,
+                title=f"{app_name} — 기능별 오즈비 (OR)",
+                all_app_names=or_names,
+            ),
+            use_container_width=True,
+            key=f"cv_or_plot_{app_name}",
+        )
+
+    # ── 공통 기능 통합 비교 도트 플롯 ─────────────────────────────────────
+    if len(or_names) >= 2:
+        st.markdown("##### 공통 기능 오즈비 비교 (전 앱)")
+        if common_cats:
+            common_df = combined_or[combined_or["feature_category"].isin(common_cats)]
+            st.caption(
+                f"모든 앱({', '.join(or_names)})에 공통으로 등장하는 "
+                f"{len(common_cats)}개 기능의 OR을 한 차트에서 비교합니다."
+            )
+            st.plotly_chart(
+                _or_dot_plot(
+                    common_df, or_names, use_log=use_log,
+                    title="공통 기능 카테고리별 오즈비 (OR) 비교",
+                    all_app_names=or_names,
+                ),
+                use_container_width=True,
+                key="cv_or_plot_common",
+            )
+        else:
+            st.info("분석 앱 간 공통으로 등장한 기능 카테고리가 없습니다.")
+
+    # ── OR 상세 테이블 (앱별 탭) ──────────────────────────────────────────
     st.markdown("##### 오즈비 상세 테이블")
-    disp_cols = ["feature_category", "app_name", "OR", "ci_lower", "ci_upper", "p_value"]
-    existing  = [c for c in disp_cols if c in combined_or.columns]
-    table_df  = combined_or[existing].copy()
-    if "p_value" in table_df.columns:
-        def _sig(p):
-            return "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "n.s."
-        table_df["유의성"] = table_df["p_value"].apply(_sig)
+    disp_cols = ["feature_category", "OR", "ci_lower", "ci_upper", "p_value"]
+
+    def _sig(p: float) -> str:
+        return "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "n.s."
+
     col_rename = {
-        "feature_category": "기능 카테고리", "app_name": "앱",
+        "feature_category": "기능 카테고리",
         "OR": "오즈비", "ci_lower": "95% CI 하한", "ci_upper": "95% CI 상한",
         "p_value": "p-value",
     }
-    st.dataframe(
-        table_df.rename(columns=col_rename).sort_values(["앱", "오즈비"] if "앱" in table_df.rename(columns=col_rename).columns else ["app_name", "OR"], ascending=[True, False]),
-        use_container_width=True, height=380,
-    )
+    tabs = st.tabs(or_names)
+    for tab, app_name in zip(tabs, or_names):
+        with tab:
+            app_df = combined_or[combined_or["app_name"] == app_name]
+            if app_df.empty:
+                st.warning(f"{app_name}: 데이터 없음")
+                continue
+            existing = [c for c in disp_cols if c in app_df.columns]
+            tdf = app_df[existing].copy().sort_values("OR", ascending=False)
+            if "p_value" in tdf.columns:
+                tdf["유의성"] = tdf["p_value"].apply(_sig)
+            st.dataframe(tdf.rename(columns=col_rename), use_container_width=True, height=360)
 
     # Insight
     items = []
@@ -609,7 +794,7 @@ def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: 
         if not sig_or.empty:
             top_or = sig_or.nlargest(1, "OR").iloc[0]
             or_summary_parts.append(
-                f"{app_emoji(an, or_names)}{an} 긍정 1위: <b>{top_or['feature_category']}</b> (OR={top_or['OR']:.2f})"
+                f"{app_icon_html(an, size=14, color=app_color(an, or_names))}<b style='color:{app_color(an, or_names)};'>{an}</b> 긍정 1위: <b>{top_or['feature_category']}</b> (OR={top_or['OR']:.2f})"
             )
     or_summary = " / ".join(or_summary_parts) if or_summary_parts else "유의한 결과가 없습니다."
 
@@ -628,6 +813,13 @@ def _render_or_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: 
 _DELTA_CLIP_THRESHOLD = 5.0   # |ΔOR| > 이 값이면 x축 클리핑
 
 
+def _hex_rgba(hex_color: str, alpha: float) -> str:
+    """Convert #RRGGBB hex color to rgba(r,g,b,alpha) string."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def _delta_or_chart(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
     df_d = combined.dropna(subset=["delta_or"]).copy()
     fig = go.Figure()
@@ -642,7 +834,7 @@ def _delta_or_chart(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
     clip = max(clip, 0.5)
     do_clip = abs_max > _DELTA_CLIP_THRESHOLD
 
-    for app_name in app_names[1:]:
+    for app_name in app_names:
         sub = df_d[df_d["app_name"] == app_name].sort_values("delta_or")
         if sub.empty:
             continue
@@ -659,6 +851,10 @@ def _delta_or_chart(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
             for i, v in enumerate(x_display)
         ]
 
+        bar_colors = [
+            _hex_rgba(color, 0.45) if v < 0 else _hex_rgba(color, 0.90)
+            for v in sub["delta_or"]
+        ]
         fig.add_trace(go.Bar(
             x=x_display,
             y=sub["feature_category"],
@@ -668,9 +864,8 @@ def _delta_or_chart(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
             textposition="outside",
             textfont=dict(size=9, color=TEXT),
             marker=dict(
-                color=[("#FF6B8A" if v < 0 else color) for v in sub["delta_or"]],
+                color=bar_colors,
                 line=dict(color=color, width=0.8),
-                opacity=0.85,
             ),
             hovertemplate=(
                 f"<b>{app_name}</b><br>기능: %{{y}}<br>"
@@ -693,18 +888,13 @@ def _delta_or_chart(combined: pd.DataFrame, app_names: list[str]) -> go.Figure:
         bargroupgap=0.1,
     )
     apply_dark_theme(fig, centered_legend=False)
-    fig.update_layout(legend=dict(
-        bgcolor="#131820", bordercolor=LINE, font=dict(color=TEXT),
-        orientation="h", yanchor="top", y=-0.08, xanchor="center", x=0.5,
-    ))
+    fig.update_layout(showlegend=False)
     if do_clip:
         fig.update_xaxes(range=[-clip * 1.5, clip * 1.5])
     return fig
 
 
 def _render_delta_section(combined_or: pd.DataFrame, app_names: list[str], raw_df: pd.DataFrame) -> None:
-    base_app = app_names[0]
-
     # ΔOR 데이터 없는 경우
     has_delta = "delta_or" in combined_or.columns and combined_or["delta_or"].notna().any()
     if not has_delta:
@@ -736,10 +926,27 @@ def _render_delta_section(combined_or: pd.DataFrame, app_names: list[str], raw_d
         )
         return
 
+    # 기준앱 = 사용자가 첫 번째로 선택한 앱 (app_names는 선택 순서 유지)
+    base_app = app_names[0]
+    comp_apps = [an for an in app_names if an != base_app]
+
     st.caption(f"기준 앱: **{base_app}** | ΔOR = 비교 앱 OR − {base_app} OR")
     delta_fig = _delta_or_chart(combined_or, app_names)
     if delta_fig.data:
         st.plotly_chart(delta_fig, use_container_width=True)
+        # 커스텀 아이콘 범례
+        legend_parts = []
+        for an in app_names:
+            color = app_color(an, app_names)
+            icon = app_icon_html(an, size=18, color=color)
+            legend_parts.append(
+                f'<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px;">'
+                f'{icon}<span style="color:{color};font-size:0.82rem;">{an}</span></span>'
+            )
+        st.markdown(
+            f'<div style="text-align:center;margin-top:-8px;margin-bottom:8px;">{"".join(legend_parts)}</div>',
+            unsafe_allow_html=True,
+        )
 
     # ΔOR 피벗 테이블
     st.markdown("##### ΔOR 상세 테이블")
@@ -755,9 +962,9 @@ def _render_delta_section(combined_or: pd.DataFrame, app_names: list[str], raw_d
     except Exception:
         st.dataframe(df_d, use_container_width=True)
 
-    # Insight
+    # Insight — 비교 앱들만 표시
     items = []
-    for app_name in app_names[1:]:
+    for app_name in comp_apps:
         sub = df_d[df_d["app_name"] == app_name]
         if sub.empty:
             items.append((app_name, app_color(app_name, app_names),
@@ -777,12 +984,12 @@ def _render_delta_section(combined_or: pd.DataFrame, app_names: list[str], raw_d
         ))
 
     urgent_list = []
-    for an in app_names[1:]:
+    for an in comp_apps:
         sub_d = df_d[df_d["app_name"] == an]
         if not sub_d.empty:
             worst_d = sub_d.loc[sub_d["delta_or"].idxmin()]
             urgent_list.append(
-                f"{app_emoji(an, app_names)}{an}: <b>{worst_d['feature_category']}</b> (ΔOR={worst_d['delta_or']:.2f})"
+                f"{app_icon_html(an, size=14, color=app_color(an, app_names))}<b style='color:{app_color(an, app_names)};'>{an}</b>: <b>{worst_d['feature_category']}</b> (ΔOR={worst_d['delta_or']:.2f})"
             )
     delta_summary = ("우선 개선 과제 — " + " / ".join(urgent_list)) if urgent_list else None
 
@@ -956,7 +1163,7 @@ def render(
 
     # ── 섹션 4: OR 비교 ─────────────────────────────────────────────────────
     st.markdown("#### 기능별 오즈비(OR) 비교")
-    _render_or_section(combined_or, app_names, raw_df)
+    _render_or_section(combined_or, app_names, raw_df, or_results)
 
     # ── 섹션 5: ΔOR 경쟁 우위/열위 ──────────────────────────────────────────
     st.divider()
