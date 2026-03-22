@@ -7,12 +7,7 @@ Shared visualization utilities
 """
 from __future__ import annotations
 
-import colorsys
-import io
-
-import requests
 import streamlit as st
-from PIL import Image
 
 from config.settings import APP_COLORS
 
@@ -50,6 +45,11 @@ def _extract_dominant_color(icon_url: str) -> str | None:
        near-white (v>0.9, s<0.15) and near-black (v<0.12) regions
     """
     try:
+        import colorsys
+        import io
+        import requests
+        from PIL import Image
+
         resp = requests.get(icon_url, timeout=6)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
