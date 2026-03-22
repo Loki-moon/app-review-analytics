@@ -41,7 +41,7 @@ _DEFAULTS: dict = {
     "page": "input",
     "selected_platforms": ["Google Play Store", "Apple App Store"],
     "selected_apps": [],
-    "start_date": date.today() - timedelta(days=30),
+    "start_date": date.today() - timedelta(days=365),
     "end_date": date.today(),
     "raw_df": pd.DataFrame(),
     "pipeline_result": {},
@@ -61,7 +61,7 @@ _APP_COLORS = ["#4F8EF7", "#F7844F", "#4FD6A5", "#C84FF7", "#F7D84F"]
 # 결과 탭 목록
 _RESULT_TABS = [
     ("📊", "분석 Summary"),
-    ("📋", "리뷰 원본 데이터"),
+    ("📋", "리뷰 상세 분석"),
     ("☁️", "키워드 탐색"),
     ("📈", "오즈비 분석"),
     ("🔬", "통계 검증"),
@@ -152,7 +152,7 @@ def _render_sidebar():
             unsafe_allow_html=True,
         )
 
-        if st.button("📋 입력 설정", use_container_width=True,
+        if st.button("📋 분석 설정", use_container_width=True,
                      type="primary" if not is_result else "secondary"):
             st.session_state.page = "input"
             st.rerun()
@@ -218,7 +218,7 @@ def _render_sidebar():
             st.divider()
 
         if done:
-            if st.button("🔄 새 분석 시작", use_container_width=True):
+            if st.button("🔄 분석 초기화", use_container_width=True):
                 for k in ["analysis_done", "pipeline_result", "raw_df",
                           "selected_apps", "errors", "validation_result",
                           "_last_search_query", "search_results"]:
@@ -376,13 +376,74 @@ _LOADING_STAGES = [
     ("📊", "분석 완료!", "결과를 불러오는 중...", 99),
 ]
 
+_STAGE_LABELS = ["접수", "접속", "수집", "정리", "반환", "분석", "완료"]
 
-def _render_loading(placeholder, parrot: str, stage: str, detail: str, pct: int):
+
+def _render_loading(placeholder, parrot: str, stage: str, detail: str, pct: int, stage_idx: int = 0):
     pct = min(pct, 100)
+    n = len(_STAGE_LABELS)
+
+    # ── 전체 진행 %: 단계 기반 (stage_idx / max_stage * 100) ──────────────────
+    overall_pct = round(stage_idx / (n - 1) * 100) if n > 1 else 100
+    # 수집 단계(stage 2)처럼 한 단계 내 pct가 긴 경우, 다음 단계 비율까지 부분 반영
+    next_stage_pct = round((stage_idx + 1) / (n - 1) * 100) if stage_idx < n - 1 else 100
+    stage_share = (pct - _LOADING_STAGES[stage_idx][3]) / max(
+        (_LOADING_STAGES[min(stage_idx + 1, n - 1)][3] - _LOADING_STAGES[stage_idx][3]), 1
+    )
+    overall_pct = round(overall_pct + (next_stage_pct - overall_pct) * max(0, min(1, stage_share)))
+
+    # ── 단조 증가 보장: 이전 최댓값 이하로 내려가지 않음 ──────────────────────
+    prev_max = st.session_state.get("_loading_max_pct", 0)
+    overall_pct = max(overall_pct, prev_max)
+    st.session_state["_loading_max_pct"] = overall_pct
+
+    # stepper track: 완료된 구간 비율
+    track_pct = (stage_idx / (n - 1) * 100) if n > 1 else 100
+
+    step_html = ""
+    for i, lbl in enumerate(_STAGE_LABELS):
+        if i < stage_idx:
+            # 완료 — 체크 아이콘
+            step_html += (
+                f'<div class="loading-step">'
+                f'<div class="loading-step-dot dot-done">&#10003;</div>'
+                f'<div class="loading-step-lbl lbl-done">{lbl}</div>'
+                f'</div>'
+            )
+        elif i == stage_idx:
+            step_html += (
+                f'<div class="loading-step">'
+                f'<div class="loading-step-dot dot-active"></div>'
+                f'<div class="loading-step-lbl lbl-active">{lbl}</div>'
+                f'</div>'
+            )
+        else:
+            step_html += (
+                f'<div class="loading-step">'
+                f'<div class="loading-step-dot dot-pending"></div>'
+                f'<div class="loading-step-lbl lbl-pending">{lbl}</div>'
+                f'</div>'
+            )
+
     with placeholder.container():
         st.markdown(f"""
         <div class="loading-overlay">
             <div class="loading-modal">
+                <div class="loading-overall">
+                    <div class="loading-overall-toprow">
+                        <span class="loading-overall-title">전체 진행</span>
+                        <span class="loading-overall-pct">{overall_pct}%</span>
+                    </div>
+                    <div class="loading-overall-bar">
+                        <div class="loading-overall-bar-fill" style="width:{overall_pct}%;"></div>
+                    </div>
+                    <div class="loading-stepper">
+                        <div class="loading-stepper-track">
+                            <div class="loading-stepper-track-fill" style="width:{track_pct:.1f}%;"></div>
+                        </div>
+                        {step_html}
+                    </div>
+                </div>
                 <span class="loading-parrot">{parrot}</span>
                 <div class="loading-stage">{stage}</div>
                 <div class="loading-detail">{detail}</div>
@@ -410,10 +471,13 @@ def run_analysis():
     start_date: date = st.session_state.start_date
     end_date: date   = st.session_state.end_date
 
+    # 단조 증가 카운터 초기화
+    st.session_state["_loading_max_pct"] = 0
+
     placeholder = st.empty()
-    _render_loading(placeholder, *_LOADING_STAGES[0][:3], _LOADING_STAGES[0][3])
+    _render_loading(placeholder, *_LOADING_STAGES[0][:3], _LOADING_STAGES[0][3], stage_idx=0)
     time.sleep(0.6)
-    _render_loading(placeholder, *_LOADING_STAGES[1][:3], _LOADING_STAGES[1][3])
+    _render_loading(placeholder, *_LOADING_STAGES[1][:3], _LOADING_STAGES[1][3], stage_idx=1)
 
     all_records = []
     errors: list[str] = []
@@ -452,6 +516,7 @@ def run_analysis():
                     placeholder,
                     _LOADING_STAGES[2][0], _LOADING_STAGES[2][1],
                     f"[{_plat}] {_app.app_name}: {current:,}개 수집 중...", pct,
+                    stage_idx=2,
                 )
 
             records = scraper.fetch_reviews(
@@ -478,15 +543,15 @@ def run_analysis():
             st.error("수집된 리뷰가 없습니다. 기간을 조정하거나 다른 앱을 선택해주세요.")
         return
 
-    _render_loading(placeholder, *_LOADING_STAGES[3][:3], _LOADING_STAGES[3][3])
+    _render_loading(placeholder, *_LOADING_STAGES[3][:3], _LOADING_STAGES[3][3], stage_idx=3)
     raw_df = pd.DataFrame([asdict(r) for r in all_records])
     st.session_state.raw_df = raw_df
 
-    _render_loading(placeholder, *_LOADING_STAGES[4][:3], _LOADING_STAGES[4][3])
+    _render_loading(placeholder, *_LOADING_STAGES[4][:3], _LOADING_STAGES[4][3], stage_idx=4)
 
     def _pipeline_cb(step: int, total: int, msg: str):
         pct = 90 + int(step / total * 9)
-        _render_loading(placeholder, _LOADING_STAGES[5][0], _LOADING_STAGES[5][1], msg, pct)
+        _render_loading(placeholder, _LOADING_STAGES[5][0], _LOADING_STAGES[5][1], msg, pct, stage_idx=5)
 
     pipeline_errors: list[str] = []
     try:
@@ -496,7 +561,7 @@ def run_analysis():
         pipeline_errors.append(f"분석 파이프라인 오류: {e}")
         result = {}
 
-    _render_loading(placeholder, *_LOADING_STAGES[6][:3], _LOADING_STAGES[6][3])
+    _render_loading(placeholder, *_LOADING_STAGES[6][:3], _LOADING_STAGES[6][3], stage_idx=6)
     try:
         vr = run_all_validations(
             raw_df=raw_df,
@@ -605,7 +670,7 @@ def _page_result():
 
     view_label = "📊 분석 Summary"
     view_tab, review_tab, kw_tab, or_tab, valid_tab = st.tabs([
-        view_label, "📋 리뷰 원본 데이터", "☁️ 키워드 탐색", "📈 오즈비 분석", "🔬 통계 검증",
+        view_label, "📋 리뷰 상세 분석", "☁️ 키워드 탐색", "📈 오즈비 분석", "🔬 통계 검증",
     ])
 
     if active_tab > 0:

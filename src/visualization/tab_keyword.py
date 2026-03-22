@@ -20,7 +20,7 @@ from wordcloud import WordCloud
 from config.settings import WORDCLOUD_MAX_WORDS, TOP_KEYWORDS_N, ASSETS_DIR
 from src.visualization._common import (
     BG as _BG,
-    get_ordered_app_names, app_color, render_insight_box,
+    get_ordered_app_names, app_color, render_insight_box, render_skeleton,
 )
 
 
@@ -104,7 +104,7 @@ def render(df: pd.DataFrame) -> None:
     """, unsafe_allow_html=True)
 
     if df.empty or "tokens" not in df.columns:
-        st.warning("키워드 데이터가 없습니다. 분석을 먼저 실행해주세요.")
+        render_skeleton("키워드 데이터를 분석중입니다", show_chart=True, n_rows=3)
         return
 
     # tokens 컬럼이 문자열로 저장된 경우 리스트로 복원
@@ -203,7 +203,7 @@ def render(df: pd.DataFrame) -> None:
                           f"자주 등장하는 단어일수록 사용자 관심이 집중된 주제입니다.")],
                     )
 
-                with st.expander("상위 키워드 표 보기"):
+                with st.expander("상위 키워드 표 보기", expanded=True):
                     top_df = pd.DataFrame(counter.most_common(TOP_KEYWORDS_N), columns=["키워드", "빈도"])
                     st.dataframe(top_df, use_container_width=True, height=220)
 

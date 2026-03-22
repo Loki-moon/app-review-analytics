@@ -265,3 +265,76 @@ def render_insight_box(
         f'</div>',
         unsafe_allow_html=True,
     )
+
+
+_SHIMMER_BG = (
+    "linear-gradient(90deg,"
+    "rgba(255,255,255,0.025) 0%,"
+    "rgba(255,255,255,0.08) 40%,"
+    "rgba(255,255,255,0.025) 70%)"
+)
+_SHIMMER_STYLE = (
+    f"background:{_SHIMMER_BG};"
+    "background-size:200% 100%;"
+    "animation:skeleton-shimmer 1.7s linear infinite;"
+    "border-radius:5px;"
+)
+
+
+def render_skeleton(
+    message: str = "데이터를 분석중입니다",
+    show_chart: bool = True,
+    n_rows: int = 4,
+    chart_height: int = 200,
+) -> None:
+    """Shimmer skeleton placeholder shown while section data is being computed."""
+    # --- spinner ---
+    spinner = (
+        '<span style="display:inline-block;width:13px;height:13px;'
+        'border:2px solid rgba(148,163,184,0.15);border-top-color:#7BA7F5;'
+        'border-radius:50%;animation:spin 0.8s linear infinite;'
+        'vertical-align:middle;margin-right:6px;flex-shrink:0;"></span>'
+    )
+    # --- label row ---
+    label = (
+        f'<div style="font-size:0.77rem;color:#64748B;letter-spacing:0.05em;'
+        f'font-weight:600;text-transform:uppercase;display:flex;align-items:center;'
+        f'gap:0.45rem;margin-bottom:1.1rem;">'
+        f'{spinner}{message}'
+        f'<span style="animation:skeleton-pulse 1.3s ease infinite;color:#475569;"> ···</span>'
+        f'</div>'
+    )
+    # --- fake title bars ---
+    def _bar(width: str, height: str = "9px", mb: str = "8px") -> str:
+        return (
+            f'<div style="height:{height};width:{width};{_SHIMMER_STYLE}'
+            f'margin-bottom:{mb};"></div>'
+        )
+
+    bar_html = _bar("42%") + _bar("61%", mb="18px")
+
+    # --- fake chart block ---
+    chart_html = (
+        f'<div style="width:100%;height:{chart_height}px;{_SHIMMER_STYLE}'
+        f'border-radius:8px;margin-bottom:14px;"></div>'
+        if show_chart else ""
+    )
+
+    # --- fake table rows ---
+    col_flex_sets = [[3, 1, 1, 1, 1], [2, 1, 2, 1, 1], [3, 1, 1, 2, 1], [2, 2, 1, 1, 1]]
+    rows_html = ""
+    for i in range(min(n_rows, len(col_flex_sets))):
+        cells = "".join(
+            f'<div style="flex:{f};height:26px;{_SHIMMER_STYLE}border-radius:4px;"></div>'
+            for f in col_flex_sets[i % len(col_flex_sets)]
+        )
+        rows_html += f'<div style="display:flex;gap:8px;margin-bottom:7px;">{cells}</div>'
+
+    st.markdown(
+        f'<div style="padding:1.4rem 1.2rem 1rem;border-radius:10px;'
+        f'background:rgba(255,255,255,0.015);border:1px solid rgba(255,255,255,0.06);'
+        f'margin:0.4rem 0 1rem;">'
+        f'{label}{bar_html}{chart_html}{rows_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )

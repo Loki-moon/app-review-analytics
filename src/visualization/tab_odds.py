@@ -15,7 +15,7 @@ import streamlit as st
 from src.visualization._common import (
     SUBTEXT, LINE, TEXT,
     apply_dark_theme, centered_title,
-    get_ordered_app_names, app_color, render_insight_box,
+    get_ordered_app_names, app_color, render_insight_box, render_skeleton,
 )
 
 
@@ -219,7 +219,7 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
     """, unsafe_allow_html=True)
 
     # 분석 방법론 설명 (expander)
-    with st.expander("📐 분석 방법론 — OR 계산 방식 안내", expanded=False):
+    with st.expander("📐 분석 방법론 — OR 계산 방식 안내", expanded=True):
         st.markdown("""
         #### 왜 두 가지 분석 방법을 사용하나요?
 
@@ -252,7 +252,7 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
 
 
     if combined.empty and not or_results:
-        st.warning("회귀 분석 결과가 없습니다. 리뷰 데이터가 충분한지 확인해주세요.")
+        render_skeleton("오즈비 분석 결과를 불러오는 중입니다", show_chart=True, chart_height=240)
         return
 
     # or_results에 있는 앱 데이터가 combined에 없으면 보완 (1개 앱만 있는 경우 등)
@@ -268,7 +268,7 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
             combined = pd.concat([combined, extra], ignore_index=True) if not combined.empty else extra
 
     if combined.empty:
-        st.warning("회귀 분석 결과가 없습니다. 리뷰 데이터가 충분한지 확인해주세요.")
+        render_skeleton("오즈비 분석 결과를 불러오는 중입니다", show_chart=True, chart_height=240)
         return
 
     # app_names: or_results 기준 (회귀 성공 앱 전체) + combined에만 있는 앱 보완
@@ -454,7 +454,7 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
             )
 
     # ── 원본 다운로드 ──────────────────────────────────────────────────────
-    with st.expander("📥 원본 회귀 결과 다운로드"):
+    with st.expander("📥 원본 회귀 결과 다운로드", expanded=True):
         for app_name, df_or in or_results.items():
             csv = df_or.to_csv(index=False).encode("utf-8-sig")
             st.download_button(

@@ -2,11 +2,13 @@
 Tab 4: Feature Priority Matrix
 
 - x축: ΔOR (경쟁 우위/열위)
-- y축: 우선순위 점수
+- y축: 전략 우선도 점수
 - 사분면 레이블
-- Hover: 기능명, OR, ΔOR, 우선순위 점수
+- Hover: 기능명, OR, ΔOR, 전략 우선도 점수
 """
 from __future__ import annotations
+
+import math
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -14,32 +16,87 @@ import streamlit as st
 
 from src.analysis.delta_or import get_priority_matrix_df
 from src.visualization._common import (
-    BG as _BG, GRID as _GRID, LINE as _LINE, TEXT as _TEXT, SUBTEXT as _SUBTEXT,
+    TEXT as _TEXT, SUBTEXT as _SUBTEXT,
     apply_dark_theme, centered_title,
-    get_ordered_app_names, app_color, render_insight_box,
+    render_insight_box, render_skeleton,
 )
 
 # 다크 배경용 사분면 색상 (반투명)
 # X축 기준: 양수 = 기준앱 경쟁 우위, 음수 = 기준앱 경쟁 열위
 _QUADRANT_LABELS = {
-    "Q1": ("경쟁 열위 & 개선 시급",  "rgba(185,28,28,0.18)",    "#FF8A9A"),   # 좌상 ← 기준앱 약함 + 우선순위 높음
-    "Q2": ("경쟁 우위 유지 영역",    "rgba(6,95,70,0.18)",      "#4FD6A5"),   # 우상 ← 기준앱 강함 + 우선순위 높음
-    "Q3": ("산업 공통 문제",          "rgba(146,64,14,0.12)",    "#FBB55C"),   # 좌하 ← 경쟁사도 함께 약한 영역
-    "Q4": ("현상 유지 영역",          "rgba(30,64,175,0.12)",    "#7BA7F5"),   # 우하 ← 기준앱 강함, 상대적 저우선순위
+    "Q1": ("경쟁 열위 & 개선 시급",  "rgba(185,28,28,0.18)",    "#FF8A9A"),   # 좌상
+    "Q2": ("경쟁 우위 유지 영역",    "rgba(6,95,70,0.18)",      "#4FD6A5"),   # 우상
+    "Q3": ("산업 공통 문제",          "rgba(146,64,14,0.12)",    "#FBB55C"),   # 좌하
+    "Q4": ("현상 유지 영역",          "rgba(30,64,175,0.12)",    "#7BA7F5"),   # 우하
 }
 
+_AREA_ORDER = {
+    "경쟁 열위 · 개선 시급": 0,
+    "산업 공통 문제":        1,
+    "경쟁 우위 유지":        2,
+    "현상 유지":             3,
+}
+
+_AREA_STYLE = {
+    "경쟁 열위 · 개선 시급": ("#FF8A9A", "rgba(185,28,28,0.35)"),
+    "경쟁 우위 유지":        ("#4FD6A5", "rgba(6,95,70,0.35)"),
+    "산업 공통 문제":        ("#FBB55C", "rgba(146,64,14,0.32)"),
+    "현상 유지":             ("#7BA7F5", "rgba(30,64,175,0.30)"),
+}
+
+_SYMLOG_C = 0.3   # 작을수록 0 근처 분해능 ↑, 이상치 압축 ↑
+_Y_CLIP   = 1.5   # y축 최대 표시 점수 — 초과 포인트는 경계에 화살표로 표시
 
 
+def _symlog(x: float) -> float:
+    """sign(x) * log(1 + |x|/c) — 중앙 분해능 확대, 이상치 압축."""
+    return math.copysign(math.log1p(abs(x) / _SYMLOG_C), x) if x != 0 else 0.0
 
-def _quadrant_marker_color(x_val: float, y_val: float, x_mid: float, y_mid: float) -> str:
-    """Return the quadrant-based fill color for a scatter marker."""
-    if x_val >= x_mid and y_val >= y_mid:
-        return _QUADRANT_LABELS["Q2"][2]   # green  — 경쟁 우위 유지
-    if x_val < x_mid and y_val >= y_mid:
-        return _QUADRANT_LABELS["Q1"][2]   # red    — 경쟁 열위 & 개선 시급
-    if x_val < x_mid and y_val < y_mid:
-        return _QUADRANT_LABELS["Q3"][2]   # orange — 산업 공통 문제
-    return _QUADRANT_LABELS["Q4"][2]       # blue   — 현상 유지
+
+def _quadrant_marker_color(x_val: float, y_val: float, y_mid: float) -> str:
+    if x_val >= 0 and y_val >= y_mid:  return _QUADRANT_LABELS["Q2"][2]
+    if x_val < 0  and y_val >= y_mid:  return _QUADRANT_LABELS["Q1"][2]
+    if x_val < 0  and y_val < y_mid:   return _QUADRANT_LABELS["Q3"][2]
+    return _QUADRANT_LABELS["Q4"][2]
+
+
+def _smart_text_pos(df: pd.DataFrame, x_col: str, y_col: str) -> dict[str, str]:
+    """인접 포인트를 고려한 라벨 위치 결정 — 겹침 최소화."""
+    if df.empty:
+        return {}
+
+    positions: dict[str, str] = {}
+    cats = df["feature_category"].tolist()
+    xs   = df[x_col].tolist()
+    ys   = df[y_col].tolist()
+    n    = len(df)
+
+    x_span = max(xs) - min(xs) if n > 1 else 1.0
+    y_span = max(ys) - min(ys) if n > 1 else 1.0
+    xt = max(x_span * 0.08, 0.15)
+    yt = max(y_span * 0.12, 0.05)
+
+    for i, cat in enumerate(cats):
+        xi, yi = xs[i], ys[i]
+        n_above = sum(
+            1 for j in range(n)
+            if j != i and abs(xs[j] - xi) <= xt and 0 < ys[j] - yi <= yt * 4
+        )
+        n_right = sum(
+            1 for j in range(n)
+            if j != i and xs[j] > xi and abs(xs[j] - xi) <= xt * 2 and abs(ys[j] - yi) <= yt
+        )
+
+        if n_above > 0 and n_right > 0:
+            positions[cat] = "bottom left"
+        elif n_above > 0:
+            positions[cat] = "bottom center"
+        elif n_right > 0:
+            positions[cat] = "top left"
+        else:
+            positions[cat] = "top center"
+
+    return positions
 
 
 def _build_scatter(
@@ -47,55 +104,99 @@ def _build_scatter(
     app_or_data: pd.DataFrame,
     base_app: str | None = None,
 ) -> go.Figure:
+    """메인 산점도 — symlog x축, x/y 이중 클리핑, 방향별 화살표 마커."""
     fig = go.Figure()
 
-    x_mid = 0.0
     y_mid = matrix_df["priority_score_max"].median() if not matrix_df.empty else 0.5
 
-    # ── 대칭 x축 범위 + 균형 잡힌 y축 ─────────────────────────────────────────
-    x_abs_max = max(abs(matrix_df["delta_or_mean"].min()), abs(matrix_df["delta_or_mean"].max()))
-    x_pad = max(0.6, x_abs_max * 0.18)
-    x_range = [-(x_abs_max + x_pad), x_abs_max + x_pad]
+    df = matrix_df.copy()
+    df["_x_plot"] = df["delta_or_mean"].apply(_symlog)
 
-    y_max_raw = matrix_df["priority_score_max"].max()
-    y_pad = max(0.15, y_max_raw * 0.18)
-    y_range = [0, y_max_raw + y_pad]
+    # ── X축 클리핑: 90th pct, min 1.5 raw ────────────────────────────────────
+    raw_abs  = df["delta_or_mean"].abs()
+    clip_raw = float(max(raw_abs.quantile(0.90), 1.5))
+    clip_sym = _symlog(clip_raw)
 
+    df["_x_display"] = df["_x_plot"].clip(-clip_sym, clip_sym)
+    df["_xr_clamp"]  = df["_x_plot"] > clip_sym + 1e-9    # 우측 초과
+    df["_xl_clamp"]  = df["_x_plot"] < -(clip_sym + 1e-9) # 좌측 초과
+
+    # ── Y축 클리핑: _Y_CLIP 고정 ─────────────────────────────────────────────
+    df["_y_display"] = df["priority_score_max"].clip(upper=_Y_CLIP)
+    df["_y_clamp"]   = df["priority_score_max"] > _Y_CLIP + 1e-9
+
+    # Symmetric x range, y range 고정
+    x_pad   = clip_sym * 0.12
+    x_range = [-(clip_sym + x_pad), clip_sym + x_pad]
+    y_range = [0, _Y_CLIP * 1.08]
+
+    # Ticks (x 원본 스케일)
+    _cands = [-5, -4, -3, -2.5, -2, -1.5, -1, -0.5, -0.25, 0,
+              0.25, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5]
+    tick_raw  = [t for t in _cands if abs(t) <= clip_raw * 1.05]
+    tick_vals = [_symlog(t) for t in tick_raw]
+    tick_text = [("0" if t == 0 else f"{t:+g}") for t in tick_raw]
+
+    # Smart text positions (클리핑된 표시 좌표 기준)
+    _pos_input = df[["feature_category"]].copy()
+    _pos_input["_xd"] = df["_x_display"]
+    _pos_input["_yd"] = df["_y_display"]
+    _pos_input = _pos_input.rename(columns={"_xd": "_x_display", "_yd": "priority_score_max"})
+    text_positions = _smart_text_pos(_pos_input, "_x_display", "priority_score_max")
+
+    # Quadrant backgrounds
+    x_mid = 0.0
     quadrants = [
         (x_range[0], x_mid, y_mid, y_range[1], "Q1"),
-        (x_mid, x_range[1], y_mid, y_range[1], "Q2"),
-        (x_range[0], x_mid, y_range[0], y_mid, "Q3"),
-        (x_mid, x_range[1], y_range[0], y_mid, "Q4"),
+        (x_mid,  x_range[1], y_mid, y_range[1], "Q2"),
+        (x_range[0], x_mid, y_range[0], y_mid,  "Q3"),
+        (x_mid,  x_range[1], y_range[0], y_mid,  "Q4"),
     ]
     for (x0, x1, y0, y1, q) in quadrants:
         label, fillcolor, font_color = _QUADRANT_LABELS[q]
         fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
                       fillcolor=fillcolor, opacity=1.0, layer="below", line_width=0)
-        label_y = y0 + (y1 - y0) * 0.94
+        # 라벨 y는 표시 범위 내 클리핑
+        ann_y = min(y0 + (y1 - y0) * 0.94, y_range[1] * 0.97)
         fig.add_annotation(
-            x=(x0 + x1) / 2, y=label_y,
+            x=(x0 + x1) / 2, y=ann_y,
             text=f"<b>{label}</b>",
-            showarrow=False,
-            font=dict(size=12, color=font_color),
-            xanchor="center",
+            showarrow=False, font=dict(size=12, color=font_color), xanchor="center",
         )
 
-    # 기준선
     base_label = f"{base_app} 기준" if base_app else "기준선"
     fig.add_vline(x=0, line_dash="dash", line_color=_SUBTEXT, line_width=1,
                   annotation_text=base_label, annotation_position="top right",
                   annotation_font_color=_SUBTEXT, annotation_font_size=10)
     fig.add_hline(y=y_mid, line_dash="dash", line_color=_SUBTEXT, line_width=1,
-                  annotation_text="우선순위 중간값", annotation_position="right",
+                  annotation_text="전략 우선도 중간값", annotation_position="right",
                   annotation_font_color=_SUBTEXT, annotation_font_size=10)
 
-    # ── 산점도 — 사분면 컬러로 마커 색상 결정 ─────────────────────────────────
-    for _, row in matrix_df.iterrows():
-        cat = row["feature_category"]
-        x_val = row["delta_or_mean"]
-        y_val = row["priority_score_max"]
-        or_val = row["or_mean"]
-        marker_color = _quadrant_marker_color(x_val, y_val, x_mid, y_mid)
+    # X 클리핑 경계선
+    if (df["_xr_clamp"] | df["_xl_clamp"]).any():
+        for sign in (+1, -1):
+            fig.add_vline(x=sign * clip_sym,
+                          line_dash="dot", line_color="rgba(148,163,184,0.22)", line_width=1)
+    # Y 클리핑 경계선
+    if df["_y_clamp"].any():
+        fig.add_hline(y=_Y_CLIP,
+                      line_dash="dot", line_color="rgba(148,163,184,0.22)", line_width=1,
+                      annotation_text=f"표시 한계 ({_Y_CLIP}점)", annotation_position="left",
+                      annotation_font_color="rgba(148,163,184,0.5)", annotation_font_size=9)
+
+    for _, row in df.iterrows():
+        cat      = row["feature_category"]
+        x_raw    = row["delta_or_mean"]
+        x_disp   = row["_x_display"]
+        y_val    = row["priority_score_max"]   # 실제 값 (hover용)
+        y_disp   = row["_y_display"]           # 표시 좌표
+        or_val   = row["or_mean"]
+        xr_c     = bool(row["_xr_clamp"])
+        xl_c     = bool(row["_xl_clamp"])
+        yc       = bool(row["_y_clamp"])
+        any_c    = xr_c or xl_c or yc
+
+        marker_color = _quadrant_marker_color(x_raw, y_val, y_mid)
 
         or_detail = ""
         if not app_or_data.empty:
@@ -104,61 +205,191 @@ def _build_scatter(
                 or_detail += f"  {r2['app_name']}: OR={r2['OR']:.3f}<br>"
 
         delta_label = (
-            f"ΔOR ({base_app} 기준): {x_val:+.3f}"
-            if base_app
-            else f"ΔOR (평균): {x_val:.3f}"
+            f"ΔOR ({base_app} 기준): {x_raw:+.3f}"
+            if base_app else f"ΔOR: {x_raw:+.3f}"
         )
-        position_label = (
-            "→ 기준앱 경쟁 우위" if x_val > 0 else "→ 기준앱 경쟁 열위"
-        ) if base_app else ""
+        pos_label = "→ 경쟁 우위" if x_raw > 0 else "→ 경쟁 열위"
+        action = (
+            "개선 우선 검토" if (x_raw < 0 and y_val >= y_mid) else
+            "강점 유지"     if (x_raw >= 0 and y_val >= y_mid) else
+            "모니터링"      if (x_raw < 0 and y_val < y_mid) else
+            "현 수준 유지"
+        )
 
-        # 마커 크기: y값 비례, 최소 14 최대 32
-        msize = max(14, min(32, y_val * 35 + 12))
+        # ── 마커 심볼: 클리핑 방향 조합 ──────────────────────────────────────
+        if   yc and xr_c:  symbol = "triangle-ne"
+        elif yc and xl_c:  symbol = "triangle-nw"
+        elif yc:            symbol = "triangle-up"
+        elif xr_c:          symbol = "triangle-right"
+        elif xl_c:          symbol = "triangle-left"
+        else:               symbol = "circle"
+
+        # 테두리 색: 클리핑 유형 구분
+        if yc and (xr_c or xl_c): line_color = "#FB923C"  # 대각 — 주황
+        elif yc:                    line_color = "#67E8F9"  # y만  — 시안
+        elif xr_c or xl_c:         line_color = "#FFD700"  # x만  — 골드
+        else:                       line_color = "white"
+        line_width = 2.5 if any_c else 1.5
+
+        # hover 보충 설명
+        clamp_parts = []
+        if xr_c or xl_c:  clamp_parts.append(f"실제 ΔOR={x_raw:+.3f}")
+        if yc:             clamp_parts.append(f"실제 전략 우선도={y_val:.3f}")
+        clamp_note = ("<br><i>표시 범위 밖 (" + " / ".join(clamp_parts) + ")</i>") if clamp_parts else ""
+
+        msize = max(10, min(24, y_val * 26 + 9))
+        # y 클리핑 포인트는 라벨을 아래에 표시 (경계 위로 튀어나오지 않게)
+        tpos = "bottom center" if yc else text_positions.get(cat, "top center")
 
         fig.add_trace(go.Scatter(
-            x=[x_val],
-            y=[y_val],
+            x=[x_disp], y=[y_disp],
             mode="markers+text",
             text=[cat],
-            textposition="top center",
-            textfont=dict(size=9, color=_TEXT),
+            textposition=tpos,
+            textfont=dict(size=8, color=_TEXT),
             marker=dict(
-                size=msize,
-                color=marker_color,
-                opacity=0.88,
-                line=dict(width=1.5, color="white"),
+                size=msize, color=marker_color, symbol=symbol,
+                opacity=0.88, line=dict(width=line_width, color=line_color),
             ),
-            name=cat,
-            showlegend=False,
+            name=cat, showlegend=False,
             hovertemplate=(
                 f"<b>{cat}</b><br>"
-                f"{delta_label}  {position_label}<br>"
-                f"우선순위 점수: {y_val:.3f}<br>"
+                f"{delta_label}  {pos_label}<br>"
+                f"전략 우선도 점수: {y_val:.3f}<br>"
                 f"OR (기준앱): {or_val:.3f}<br>"
-                f"{or_detail}"
+                f"권장 액션: <b>{action}</b>"
+                f"{clamp_note}<br>{or_detail}"
                 "<extra></extra>"
             ),
         ))
 
     x_axis_title = (
-        f"← {base_app} 경쟁 열위 &nbsp;&nbsp; | &nbsp;&nbsp; ΔOR &nbsp;&nbsp; | &nbsp;&nbsp; {base_app} 경쟁 우위 →"
-        if base_app
-        else "ΔOR (← 경쟁 열위 | 경쟁 우위 →)"
+        f"← {base_app} 경쟁 열위 &nbsp;|&nbsp; ΔOR (symlog, c={_SYMLOG_C}) &nbsp;|&nbsp; {base_app} 경쟁 우위 →"
+        if base_app else
+        f"ΔOR (symlog, c={_SYMLOG_C}) &nbsp;— ← 경쟁 열위 | 경쟁 우위 →"
     )
 
-    # 데이터 포인트 수 기반으로 동적 높이 결정
-    n_points = len(matrix_df)
-    chart_height = max(850, n_points * 20 + 400)
+    chart_height = max(1000, len(df) * 22 + 420)
 
     fig.update_layout(
         title=centered_title(
-            f"기능 개선 우선순위 매트릭스 ({base_app} 기준)" if base_app else "기능 개선 우선순위 매트릭스"
+            f"기능별 전략 우선도 매트릭스 ({base_app} 기준)" if base_app
+            else "기능별 전략 우선도 매트릭스"
         ),
         xaxis_title=x_axis_title,
-        yaxis_title="우선순위 점수 (높을수록 개선 시급)",
+        yaxis_title="전략 우선도 점수 (개선 시급성 + 강점 유지 중요도)",
         height=chart_height,
         hovermode="closest",
-        margin=dict(l=10, r=30, t=80, b=80),
+        margin=dict(l=10, r=30, t=80, b=90),
+    )
+    apply_dark_theme(fig)
+    fig.update_xaxes(range=x_range, zeroline=False, tickvals=tick_vals, ticktext=tick_text)
+    fig.update_yaxes(range=y_range, zeroline=False)
+    return fig
+
+
+def _build_center_zoom(
+    matrix_df: pd.DataFrame,
+    app_or_data: pd.DataFrame,
+    base_app: str | None = None,
+    zoom_limit: float = 1.5,
+) -> go.Figure | None:
+    """중앙 구간 확대 보조 차트 — 선형 x축, |ΔOR| ≤ zoom_limit 범위만, 전체 라벨 표시."""
+    center_df = matrix_df[matrix_df["delta_or_mean"].abs() <= zoom_limit].copy()
+    if center_df.empty or len(center_df) < 3:
+        return None
+
+    fig   = go.Figure()
+    y_mid = matrix_df["priority_score_max"].median()
+
+    _Y_CLIP_ZOOM = 0.9   # 중앙 확대 차트 전용 y축 최대값
+
+    x_range = [-zoom_limit * 1.12, zoom_limit * 1.12]
+    y_range = [0, _Y_CLIP_ZOOM * 1.08]
+
+    # Y 클리핑 적용 (중앙 확대 차트는 0.9 기준)
+    center_df = center_df.copy()
+    center_df["_y_display"] = center_df["priority_score_max"].clip(upper=_Y_CLIP_ZOOM)
+    center_df["_y_clamp"]   = center_df["priority_score_max"] > _Y_CLIP_ZOOM + 1e-9
+
+    quadrants = [
+        (x_range[0], 0, y_mid, y_range[1], "Q1"),
+        (0, x_range[1], y_mid, y_range[1], "Q2"),
+        (x_range[0], 0, y_range[0], y_mid, "Q3"),
+        (0, x_range[1], y_range[0], y_mid, "Q4"),
+    ]
+    for (x0, x1, y0, y1, q) in quadrants:
+        label, fillcolor, font_color = _QUADRANT_LABELS[q]
+        fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1,
+                      fillcolor=fillcolor, opacity=1.0, layer="below", line_width=0)
+        ann_y = min(y0 + (y1 - y0) * 0.94, y_range[1] * 0.97)
+        fig.add_annotation(
+            x=(x0 + x1) / 2, y=ann_y,
+            text=f"<b>{label}</b>",
+            showarrow=False, font=dict(size=10, color=font_color), xanchor="center",
+        )
+
+    fig.add_vline(x=0, line_dash="dash", line_color=_SUBTEXT, line_width=1)
+    fig.add_hline(y=y_mid, line_dash="dash", line_color=_SUBTEXT, line_width=1)
+
+    if center_df["_y_clamp"].any():
+        fig.add_hline(y=_Y_CLIP_ZOOM, line_dash="dot",
+                      line_color="rgba(148,163,184,0.22)", line_width=1)
+
+    # 전체 라벨 — 스마트 위치 (클리핑된 좌표 기준)
+    _pos2 = center_df[["feature_category"]].copy()
+    _pos2["_x"] = center_df["delta_or_mean"]
+    _pos2["priority_score_max"] = center_df["_y_display"]
+    text_positions = _smart_text_pos(_pos2, "_x", "priority_score_max")
+
+    for _, row in center_df.iterrows():
+        cat    = row["feature_category"]
+        x_raw  = row["delta_or_mean"]
+        y_val  = row["priority_score_max"]
+        y_disp = row["_y_display"]
+        yc     = bool(row["_y_clamp"])
+        or_val = row["or_mean"]
+        marker_color = _quadrant_marker_color(x_raw, y_val, y_mid)
+        msize = max(10, min(22, y_val * 24 + 9))
+        symbol     = "triangle-up" if yc else "circle"
+        line_color = "#67E8F9"    if yc else "white"
+        line_width = 2.0          if yc else 1.2
+        action = (
+            "개선 우선 검토" if (x_raw < 0 and y_val >= y_mid) else
+            "강점 유지"     if (x_raw >= 0 and y_val >= y_mid) else
+            "모니터링"      if (x_raw < 0 and y_val < y_mid) else
+            "현 수준 유지"
+        )
+        tpos  = "bottom center" if yc else text_positions.get(cat, "top center")
+        clamp_note = f"<br><i>표시 범위 밖 (실제 점수={y_val:.3f})</i>" if yc else ""
+
+        fig.add_trace(go.Scatter(
+            x=[x_raw], y=[y_disp],
+            mode="markers+text",
+            text=[cat],
+            textposition=tpos,
+            textfont=dict(size=8, color=_TEXT),
+            marker=dict(size=msize, color=marker_color, symbol=symbol, opacity=0.9,
+                        line=dict(width=line_width, color=line_color)),
+            name=cat, showlegend=False,
+            hovertemplate=(
+                f"<b>{cat}</b><br>"
+                f"ΔOR: {x_raw:+.3f} ({'경쟁 우위' if x_raw >= 0 else '경쟁 열위'})<br>"
+                f"전략 우선도 점수: {y_val:.3f}<br>"
+                f"OR (기준앱): {or_val:.3f}<br>"
+                f"권장 액션: <b>{action}</b>{clamp_note}<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title=centered_title(
+            f"중앙 구간 확대 — |ΔOR| ≤ {zoom_limit:.1f} (선형 스케일)", size=13
+        ),
+        xaxis_title="ΔOR (선형 스케일) — ← 경쟁 열위 | 경쟁 우위 →",
+        yaxis_title="전략 우선도 점수",
+        height=560,
+        hovermode="closest",
+        margin=dict(l=10, r=30, t=60, b=60),
     )
     apply_dark_theme(fig)
     fig.update_xaxes(range=x_range, zeroline=False)
@@ -169,75 +400,197 @@ def _build_scatter(
 def render(combined: pd.DataFrame) -> None:
     st.markdown("""
     <div class="info-box">
-    기능 개선 우선순위 매트릭스입니다.<br>
-    <b>좌상단(경쟁 열위 & 개선 시급)</b>에 위치한 기능일수록 경쟁사 대비 불리하고, 우선적으로 개선이 필요합니다.
+    기능별 전략 우선도 매트릭스입니다.<br>
+    <b>ΔOR &gt; 0</b>이면 기준앱 <b>경쟁 우위</b> (→ 강점 유지),
+    <b>ΔOR &lt; 0</b>이면 <b>경쟁 열위</b> (→ 개선 우선 검토)입니다.<br>
+    전략 우선도 점수는 <b>개선 시급성</b>과 <b>강점 유지 중요도</b>를 함께 반영한 종합 지표입니다.
+    경쟁 우위 기능이 높은 점수를 받더라도 이는 강점을 유지해야 함을 의미합니다.
     </div>
     """, unsafe_allow_html=True)
 
     if combined.empty or "delta_or" not in combined.columns:
-        st.warning("우선순위 매트릭스를 계산하려면 2개 이상의 앱 분석 결과가 필요합니다.")
+        render_skeleton("전략 우선도 매트릭스를 분석중입니다", show_chart=True, chart_height=260)
         return
 
     matrix_df = get_priority_matrix_df(combined)
 
     if matrix_df.empty:
-        st.warning("우선순위 매트릭스 데이터가 부족합니다.")
+        render_skeleton("전략 우선도 매트릭스를 분석중입니다", show_chart=True, chart_height=260)
         return
 
-    # ── 차트 ──────────────────────────────────────────────────────────────────
-    fig = _build_scatter(matrix_df, combined)
+    # ── 기준앱 이름 추출 ──────────────────────────────────────────────────────
+    selected_apps = st.session_state.get("selected_apps", [])
+    base_app_name: str | None = (
+        selected_apps[0].app_name if selected_apps else None
+    )
+
+    # ── 사분면 분류 헬퍼 ──────────────────────────────────────────────────────
+    y_mid = matrix_df["priority_score_max"].median()
+
+    def _area(delta_or: float, score: float) -> str:
+        if delta_or < 0 and score >= y_mid:   return "경쟁 열위 · 개선 시급"
+        if delta_or >= 0 and score >= y_mid:  return "경쟁 우위 유지"
+        if delta_or < 0 and score < y_mid:    return "산업 공통 문제"
+        return "현상 유지"
+
+    def _action(area: str) -> str:
+        return {
+            "경쟁 열위 · 개선 시급": "개선 우선 검토",
+            "경쟁 우위 유지":        "강점 유지",
+            "산업 공통 문제":        "모니터링",
+            "현상 유지":             "현 수준 유지",
+        }.get(area, "검토")
+
+    tbl = matrix_df.copy()
+    tbl["영역"]      = tbl.apply(lambda r: _area(r["delta_or_mean"], r["priority_score_max"]), axis=1)
+    tbl["권장 액션"] = tbl["영역"].map(_action)
+
+    # ── 영역 우선순위 기반 정렬 (경쟁우위 ≠ 개선우선) ─────────────────────────
+    tbl["_area_order"] = tbl["영역"].map(_AREA_ORDER).fillna(9)
+    tbl = tbl.sort_values(
+        ["_area_order", "priority_score_max"],
+        ascending=[True, False],
+    ).reset_index(drop=True)
+    tbl.index = tbl.index + 1
+
+    # ── 메인 차트 ─────────────────────────────────────────────────────────────
+    fig = _build_scatter(matrix_df, combined, base_app=base_app_name)
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── 결과해석 ──────────────────────────────────────────────────────────────
-    app_names = get_ordered_app_names(combined)
-    top3 = matrix_df.nlargest(3, "priority_score_max")
-    top_text = " → ".join(
-        f"<b>{r['feature_category']}</b>(점수 {r['priority_score_max']:.2f}, ΔOR={r['delta_or_mean']:.2f})"
-        for _, r in top3.iterrows()
+    # ── 중앙 구간 확대 보조 차트 ──────────────────────────────────────────────
+    zoom_limit = float(max(
+        min(matrix_df["delta_or_mean"].abs().quantile(0.80), 1.5),
+        0.8,
+    ))
+    fig_zoom = _build_center_zoom(
+        matrix_df, combined, base_app=base_app_name, zoom_limit=zoom_limit,
     )
-    q1_features = matrix_df[
-        (matrix_df["delta_or_mean"] < 0) &
-        (matrix_df["priority_score_max"] >= matrix_df["priority_score_max"].median())
-    ]
+    if fig_zoom is not None:
+        st.markdown(
+            '<div style="font-size:0.78rem;color:#64748B;margin-top:-0.5rem;margin-bottom:0.3rem;">'
+            f'▼ 중앙 밀집 구간 확대 — |ΔOR| ≤ {zoom_limit:.1f} 범위를 선형 스케일로 표시합니다.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(fig_zoom, use_container_width=True)
+
+    # ── Insight ───────────────────────────────────────────────────────────────
+    q1 = tbl[tbl["영역"] == "경쟁 열위 · 개선 시급"]
+    q2 = tbl[tbl["영역"] == "경쟁 우위 유지"]
+    q3 = tbl[tbl["영역"] == "산업 공통 문제"]
+    q4 = tbl[tbl["영역"] == "현상 유지"]
+
+    def _feat_list(sub, n=5) -> str:
+        return "、".join(sub["feature_category"].head(n).tolist()) or "없음"
+
     render_insight_box(
-        "기능 개선 우선순위 매트릭스",
-        "기능별 경쟁 열위와 사용자 불만도를 결합해 개선 우선순위를 산출합니다.",
-        "좌상단(경쟁 열위 & 개선 시급) 기능부터 개선하면 경쟁력을 가장 빠르게 올릴 수 있어요. "
-        "우선순위 점수 = |ΔOR| 60% + 취약도 40%.",
+        "기능별 전략 우선도 매트릭스",
+        "ΔOR(경쟁 우위/열위)과 전략 우선도 점수(개선 시급성 + 강점 유지 중요도)를 결합해 "
+        "기능별 전략적 포지션을 4개 사분면으로 분류합니다.",
+        "ΔOR > 0 = 경쟁 우위(강점 유지), ΔOR < 0 = 경쟁 열위(개선 검토). "
+        "전략 우선도 점수는 '개선해야 할 기능'과 '지켜야 할 강점'을 함께 반영한 종합 지표입니다.",
         [
-            ("전체 요약", "#4F8EF7",
-             f"개선 우선순위 Top 3: {top_text}. "
-             f"전체 {len(matrix_df)}개 기능 중 {len(q1_features)}개가 '경쟁 열위 &amp; 개선 시급' 영역에 있습니다."),
+            ("경쟁 열위 · 개선 시급", "#FF8A9A",
+             f"총 {len(q1)}개 기능 — 경쟁사보다 약하고 전략 우선도가 높아 즉시 개선 효과 최대. "
+             f"주요 기능: {_feat_list(q1)}"),
+            ("경쟁 우위 유지", "#4FD6A5",
+             f"총 {len(q2)}개 기능 — 기준앱 강점 보유 영역. 강점을 유지하며 차별화 포인트로 활용. "
+             f"주요 기능: {_feat_list(q2)}"),
+            ("산업 공통 문제", "#FBB55C",
+             f"총 {len(q3)}개 기능 — 경쟁사도 함께 약한 영역. 선제 투자 시 차별화 가능. "
+             f"주요 기능: {_feat_list(q3)}"),
+            ("현상 유지", "#7BA7F5",
+             f"총 {len(q4)}개 기능 — 기준앱이 강하지만 상대적 우선도 낮음. 현재 수준 유지·모니터링. "
+             f"주요 기능: {_feat_list(q4)}"),
         ],
+        summary=(
+            f"개선 우선 검토(경쟁 열위 · 개선 시급) {len(q1)}개 · "
+            f"강점 유지(경쟁 우위 유지) {len(q2)}개 · "
+            f"모니터링(산업 공통 문제) {len(q3)}개 · "
+            f"현 수준 유지(현상 유지) {len(q4)}개."
+        ),
     )
 
-    # ── 우선순위 테이블 ───────────────────────────────────────────────────────
-    st.markdown("#### 기능 개선 우선순위 테이블")
+    # ── 기능별 전략 우선도 상세 테이블 (영역별 분리) ─────────────────────────
+    st.markdown("#### 기능별 전략 우선도 상세 테이블")
     st.markdown("""
     <div class="info-box">
-    우선순위 점수 = 0.6 × |ΔOR| + 0.4 × 취약도<br>
-    취약도는 OR이 1보다 낮을수록(부정 리뷰와 더 연관될수록) 높아집니다.
+    본 표의 <b>전략 우선도</b>는 개선이 필요한 기능과 경쟁 우위 유지 기능을 함께 포함한 종합 우선도입니다.<br>
+    <b>ΔOR &gt; 0</b> = 기준앱 경쟁 우위 (→ <span style="color:#4FD6A5">강점 유지</span>) &nbsp;/&nbsp;
+    <b>ΔOR &lt; 0</b> = 기준앱 경쟁 열위 (→ <span style="color:#FF8A9A">개선 우선 검토</span>)
     </div>
     """, unsafe_allow_html=True)
 
-    priority_table = combined.sort_values("priority_score", ascending=False)[
-        [c for c in ["feature_category", "app_name", "OR", "delta_or", "priority_score", "p_value"]
-         if c in combined.columns]
-    ].head(30)
+    def _badge(text: str, area: str) -> str:
+        tc, bg = _AREA_STYLE.get(area, ("#94A3B8", "rgba(100,116,139,0.2)"))
+        return (
+            f'<span style="background:{bg};color:{tc};padding:2px 9px;'
+            f'border-radius:99px;font-size:0.73rem;font-weight:700;'
+            f'white-space:nowrap;">{text}</span>'
+        )
 
-    col_rename = {
-        "feature_category": "기능 카테고리",
-        "app_name": "앱",
-        "OR": "오즈비",
-        "delta_or": "ΔOR",
-        "priority_score": "우선순위 점수",
-        "p_value": "p-value",
-    }
-    st.dataframe(
-        priority_table.rename(columns=col_rename),
-        use_container_width=True,
-        height=400,
-    )
+    header_cols = ["전략 우선도", "기능 카테고리", "ΔOR", "OR (기준앱)", "전략 우선도 점수", "권장 액션"]
+    right_aligned = {"ΔOR", "OR (기준앱)", "전략 우선도 점수"}
+
+    area_order_list = sorted(_AREA_ORDER.keys(), key=lambda a: _AREA_ORDER[a])
+
+    for area_name in area_order_list:
+        area_tbl = tbl[tbl["영역"] == area_name]
+        if area_tbl.empty:
+            continue
+
+        tc, bg = _AREA_STYLE.get(area_name, ("#94A3B8", "rgba(100,116,139,0.15)"))
+
+        # 영역 타이틀
+        st.markdown(
+            f'<div style="margin-top:1.4rem;margin-bottom:0.4rem;">'
+            f'<span style="background:{bg};color:{tc};padding:4px 14px;'
+            f'border-radius:6px 6px 0 0;font-size:0.82rem;font-weight:700;'
+            f'letter-spacing:0.03em;">▪ {area_name}</span></div>',
+            unsafe_allow_html=True,
+        )
+
+        # 컬럼 헤더 (검정 배경)
+        header = (
+            '<thead><tr>'
+            + "".join(
+                f'<th style="position:sticky;top:0;z-index:10;background:#000000;'
+                f'padding:8px 12px;text-align:{"right" if h in right_aligned else "left"};'
+                f'font-size:0.78rem;color:#94A3B8;font-weight:600;white-space:nowrap;'
+                f'border-bottom:1px solid rgba(255,255,255,0.12);">{h}</th>'
+                for h in header_cols
+            )
+            + "</tr></thead>"
+        )
+
+        rows = ""
+        for seq, (rank, row) in enumerate(area_tbl.iterrows(), start=1):
+            action      = row["권장 액션"]
+            delta       = row["delta_or_mean"]
+            or_v        = row["or_mean"]
+            score       = row["priority_score_max"]
+            delta_color = "#4FD6A5" if delta >= 0 else "#FF8A9A"
+            row_bg      = "rgba(255,255,255,0.025)" if seq % 2 == 0 else "transparent"
+            rows += (
+                f'<tr style="background:{row_bg};border-bottom:1px solid rgba(255,255,255,0.04);">'
+                f'<td style="padding:7px 12px;text-align:center;font-size:0.8rem;color:#64748B;">{rank}</td>'
+                f'<td style="padding:7px 12px;font-size:0.82rem;color:#E2E8F0;">{row["feature_category"]}</td>'
+                f'<td style="padding:7px 12px;text-align:right;font-size:0.82rem;'
+                f'color:{delta_color};font-weight:600;">{delta:+.4f}</td>'
+                f'<td style="padding:7px 12px;text-align:right;font-size:0.82rem;color:#CBD5E1;">{or_v:.4f}</td>'
+                f'<td style="padding:7px 12px;text-align:right;font-size:0.82rem;'
+                f'color:#E2E8F0;font-weight:600;">{score:.4f}</td>'
+                f'<td style="padding:7px 10px;">{_badge(action, area_name)}</td>'
+                f'</tr>'
+            )
+
+        st.markdown(
+            '<div style="overflow-y:auto;border-radius:0 6px 6px 6px;'
+            f'border:1px solid {tc}33;margin-bottom:0.5rem;">'
+            '<table style="width:100%;border-collapse:collapse;">'
+            f'{header}<tbody>{rows}</tbody></table></div>',
+            unsafe_allow_html=True,
+        )
 
     # ── 다운로드 ──────────────────────────────────────────────────────────────
     csv = combined.to_csv(index=False).encode("utf-8-sig")

@@ -789,6 +789,230 @@ textarea::placeholder {{
   font-weight: 600;
 }}
 
+/* -- Overall stage tracker -- */
+.loading-overall {{
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.3rem;
+  border-bottom: 1px solid rgba(148,163,184,0.08);
+}}
+.loading-overall-toprow {{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.55rem;
+}}
+.loading-overall-title {{
+  font-size: 0.66rem;
+  color: rgba(148,163,184,0.45);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}}
+.loading-overall-pct {{
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #C4B5FD;
+  letter-spacing: 0.02em;
+}}
+
+/* ── 전체 진행 바 (스테퍼 위) ─────────────────────────────── */
+.loading-overall-bar {{
+  position: relative;
+  background: rgba(148,163,184,0.10);
+  border-radius: 99px;
+  height: 7px;
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+}}
+.loading-overall-bar-fill {{
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #5B21B6, #8B5CF6, #C4B5FD);
+  background-size: 200% 100%;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: shimmer-bar 2.2s linear infinite;
+  box-shadow: 0 0 8px rgba(139,92,246,0.45);
+}}
+@keyframes shimmer-bar {{
+  0%   {{ background-position: 200% 0; }}
+  100% {{ background-position: -200% 0; }}
+}}
+
+/* ── 스테퍼 (라벨 + 도트) ───────────────────────────────── */
+.loading-stepper {{
+  display: flex;
+  align-items: flex-start;
+  position: relative;
+}}
+.loading-stepper-track {{
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: rgba(148,163,184,0.10);
+  z-index: 0;
+  border-radius: 99px;
+}}
+.loading-stepper-track-fill {{
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #5B21B6, #8B5CF6);
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}}
+.loading-step {{
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+}}
+.loading-step-dot {{
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  margin-bottom: 5px;
+  flex-shrink: 0;
+}}
+.dot-done {{
+  background: #6D28D9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+  box-shadow: 0 0 0 2px rgba(109,40,217,0.3);
+}}
+.dot-active {{
+  background: #A78BFA;
+  box-shadow: 0 0 0 3px rgba(167,139,250,0.28);
+  animation: pulse-step 1.3s ease-in-out infinite;
+}}
+.dot-pending {{
+  background: rgba(148,163,184,0.13);
+  border: 1.5px solid rgba(148,163,184,0.18);
+  box-sizing: border-box;
+}}
+@keyframes pulse-step {{
+  0%, 100% {{ box-shadow: 0 0 0 3px rgba(167,139,250,0.28); }}
+  50% {{ box-shadow: 0 0 0 5px rgba(167,139,250,0.10); }}
+}}
+.loading-step-lbl {{
+  font-size: 0.57rem;
+  line-height: 1.2;
+  text-align: center;
+  word-break: keep-all;
+  max-width: 40px;
+}}
+.lbl-done   {{ color: rgba(167,139,250,0.55); }}
+.lbl-active {{ color: #C4B5FD; font-weight: 700; }}
+.lbl-pending {{ color: rgba(148,163,184,0.25); }}
+
+/* =========================
+   SKELETON LOADING
+========================= */
+@keyframes skeleton-shimmer {{
+  0%   {{ background-position: -200% center; }}
+  100% {{ background-position:  200% center; }}
+}}
+@keyframes skeleton-pulse {{
+  0%, 100% {{ opacity: 1; }}
+  50%       {{ opacity: 0.25; }}
+}}
+
+.skeleton-wrap {{
+  padding: 1.4rem 1.2rem 1rem;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.015);
+  border: 1px solid rgba(255,255,255,0.06);
+  margin: 0.4rem 0 1rem;
+}}
+
+.skeleton-label {{
+  font-size: 0.77rem;
+  color: #64748B;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 1.1rem;
+}}
+
+.skeleton-spinner {{
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(148,163,184,0.15);
+  border-top-color: #7BA7F5;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}}
+
+@keyframes spin {{
+  to {{ transform: rotate(360deg); }}
+}}
+
+.skeleton-dots {{
+  animation: skeleton-pulse 1.3s ease infinite;
+  color: #475569;
+}}
+
+.skeleton-bar {{
+  height: var(--skh, 10px);
+  border-radius: 5px;
+  width: var(--skw, 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.03) 0%,
+    rgba(255,255,255,0.09) 40%,
+    rgba(255,255,255,0.03) 70%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.7s linear infinite;
+  margin-bottom: var(--skmb, 10px);
+}}
+
+.skeleton-chart {{
+  width: 100%;
+  height: var(--skch, 200px);
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.025) 0%,
+    rgba(255,255,255,0.07)  40%,
+    rgba(255,255,255,0.025) 70%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.7s linear infinite;
+  margin-bottom: 14px;
+  position: relative;
+}}
+
+.skeleton-row {{
+  display: flex;
+  gap: 8px;
+  margin-bottom: 7px;
+}}
+
+.skeleton-cell {{
+  flex: var(--skflex, 1);
+  height: 28px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.025) 0%,
+    rgba(255,255,255,0.07)  40%,
+    rgba(255,255,255,0.025) 70%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.7s linear infinite;
+}}
+
 /* =========================
    BADGES + TABS
 ========================= */

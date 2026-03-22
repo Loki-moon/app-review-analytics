@@ -24,7 +24,7 @@ from wordcloud import WordCloud
 
 from config.settings import ASSETS_DIR, WORDCLOUD_MAX_WORDS
 from src.analysis.delta_or import get_priority_matrix_df
-from src.visualization.tab_priority import _build_scatter
+from src.visualization.tab_priority import _build_scatter, _build_center_zoom, _AREA_STYLE, _AREA_ORDER
 from src.visualization._common import (
     BG, GRID, LINE, TEXT, SUBTEXT,
     apply_dark_theme, centered_title,
@@ -306,6 +306,52 @@ def _render_vs_kpi_section(raw_df: pd.DataFrame, app_names: list[str]) -> None:
                     'font-weight:bold;color:#475569;">VS</div>',
                     unsafe_allow_html=True,
                 )
+
+
+# ── 섹션 2-B: 긍정/부정 비율 도넛 차트 ──────────────────────────────────────
+
+def _render_sentiment_donut(raw_df: pd.DataFrame, app_names: list[str]) -> None:
+    """앱별 긍정/부정/보통 비율 도넛 차트 (분석 Summary에 노출)"""
+    if raw_df.empty or "score" not in raw_df.columns:
+        return
+
+    st.markdown("#### 긍정/부정 비율")
+    cols = st.columns(max(1, len(app_names)))
+    for i, app_name in enumerate(app_names):
+        sub = raw_df[raw_df["app_name"] == app_name]
+        if sub.empty:
+            continue
+        pos = int((sub["score"] >= 4).sum())
+        neu = int((sub["score"] == 3).sum())
+        neg = int((sub["score"] <= 2).sum())
+        total = pos + neu + neg
+        color = app_color(app_name, app_names)
+
+        with cols[i]:
+            fig = go.Figure(go.Pie(
+                labels=["긍정(4~5점)", "보통(3점)", "부정(1~2점)"],
+                values=[pos, neu, neg],
+                hole=0.52,
+                marker_colors=["#10B981", "#F59E0B", "#EF4444"],
+                hovertemplate="<b>%{label}</b><br>%{value:,}건 (%{percent})<extra></extra>",
+                textinfo="percent",
+                textfont=dict(size=11),
+            ))
+            neg_pct = neg / total * 100 if total > 0 else 0
+            badge = "⚠️ 주의" if neg_pct > 65 else "✅ 양호"
+            fig.update_layout(
+                title=dict(
+                    text=f"<b style='color:{color};'>{app_name}</b>  {badge}",
+                    font=dict(color=TEXT, size=12),
+                    x=0.5, xanchor="center",
+                ),
+                height=260,
+                plot_bgcolor=BG, paper_bgcolor=BG,
+                font=dict(color=TEXT),
+                legend=dict(bgcolor="#131820", bordercolor=LINE, font=dict(color=TEXT, size=10)),
+                margin=dict(l=10, r=10, t=50, b=10),
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ── 섹션 3: 4종 워드클라우드 ─────────────────────────────────────────────────
@@ -665,7 +711,7 @@ def _render_or_section(
         unsafe_allow_html=True,
     )
 
-    with st.expander("📐 분석 방법론 — OR 계산 방식 안내", expanded=False):
+    with st.expander("📐 분석 방법론 — OR 계산 방식 안내", expanded=True):
         st.markdown("""
         #### 왜 두 가지 분석 방법을 사용하나요?
 
@@ -1043,37 +1089,143 @@ def _render_priority_section(combined_or: pd.DataFrame, app_names: list[str], ra
             st.info("매트릭스 계산 결과가 없습니다.")
             return
 
+        # ── 사분면 분류 헬퍼 ──────────────────────────────────────────────────
+        y_mid = matrix_df["priority_score_max"].median()
+
+        def _area(delta_or: float, score: float) -> str:
+            if delta_or < 0 and score >= y_mid:  return "경쟁 열위 · 개선 시급"
+            if delta_or >= 0 and score >= y_mid: return "경쟁 우위 유지"
+            if delta_or < 0 and score < y_mid:   return "산업 공통 문제"
+            return "현상 유지"
+
+        def _action(area: str) -> str:
+            return {
+                "경쟁 열위 · 개선 시급": "개선 우선 검토",
+                "경쟁 우위 유지":        "강점 유지",
+                "산업 공통 문제":        "모니터링",
+                "현상 유지":             "현 수준 유지",
+            }.get(area, "검토")
+
+        # ── 메인 산점도 ───────────────────────────────────────────────────────
         matrix_fig = _build_scatter(matrix_df, combined_or, base_app=base_app)
         st.plotly_chart(matrix_fig, use_container_width=True)
 
-        # 우선순위 상세 테이블
-        st.markdown(f"##### 기능별 우선순위 상세 테이블 ({base_app} 기준)")
-        table_cols = {
-            "feature_category": "기능 카테고리",
-            "delta_or_mean": f"ΔOR ({base_app} 기준)",
-            "or_mean": f"OR ({base_app})",
-            "priority_score_max": "우선순위 점수",
-        }
-        if "vulnerability_score" in matrix_df.columns:
-            table_cols["vulnerability_score"] = "취약도"
-        disp = matrix_df[[c for c in table_cols if c in matrix_df.columns]].copy()
-        disp = disp.sort_values("priority_score_max", ascending=False) if "priority_score_max" in disp.columns else disp
-        disp.insert(0, "순위", range(1, len(disp) + 1))
-        st.dataframe(
-            disp.rename(columns=table_cols),
-            use_container_width=True, height=360,
+        # ── 중앙 구간 확대 보조 차트 ──────────────────────────────────────────
+        zoom_limit = float(max(
+            min(matrix_df["delta_or_mean"].abs().quantile(0.80), 1.5), 0.8
+        ))
+        fig_zoom = _build_center_zoom(
+            matrix_df, combined_or, base_app=base_app, zoom_limit=zoom_limit,
         )
+        if fig_zoom is not None:
+            st.markdown(
+                f'<div style="font-size:0.78rem;color:#64748B;margin-top:-0.5rem;margin-bottom:0.3rem;">'
+                f'▼ 중앙 밀집 구간 확대 — |ΔOR| ≤ {zoom_limit:.1f} 범위를 선형 스케일로 표시합니다.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(fig_zoom, use_container_width=True)
 
-        # 사분면별 기능 분류
-        q1 = matrix_df[(matrix_df["delta_or_mean"] < 0) & (matrix_df["priority_score_max"] >= matrix_df["priority_score_max"].median())]  # 경쟁 열위 & 개선 시급
-        q2 = matrix_df[(matrix_df["delta_or_mean"] >= 0) & (matrix_df["priority_score_max"] >= matrix_df["priority_score_max"].median())]  # 경쟁 우위 유지
-        q3 = matrix_df[(matrix_df["delta_or_mean"] < 0) & (matrix_df["priority_score_max"] < matrix_df["priority_score_max"].median())]   # 산업 공통 문제
-        q4 = matrix_df[(matrix_df["delta_or_mean"] >= 0) & (matrix_df["priority_score_max"] < matrix_df["priority_score_max"].median())]  # 현상 유지
+        # ── 전략 우선도 상세 테이블 ───────────────────────────────────────────
+        st.markdown(f"#### 기능별 전략 우선도 상세 테이블 ({base_app} 기준)")
+        st.markdown(f"""
+        <div class="info-box">
+        본 표의 <b>전략 우선도</b>는 개선이 필요한 기능과 경쟁 우위 유지 기능을 함께 포함한 종합 우선도입니다.<br>
+        <b>ΔOR &gt; 0</b> = {base_app} 경쟁 우위 (→ <span style="color:#4FD6A5">강점 유지</span>) &nbsp;/&nbsp;
+        <b>ΔOR &lt; 0</b> = {base_app} 경쟁 열위 (→ <span style="color:#FF8A9A">개선 우선 검토</span>)
+        </div>
+        """, unsafe_allow_html=True)
 
-        def _cat_list(df: pd.DataFrame, n: int = 3) -> str:
-            return ", ".join(f"<b>{r['feature_category']}</b>" for _, r in df.head(n).iterrows()) or "없음"
+        tbl = matrix_df.copy()
+        tbl["영역"]      = tbl.apply(lambda r: _area(r["delta_or_mean"], r["priority_score_max"]), axis=1)
+        tbl["권장 액션"] = tbl["영역"].map(_action)
+        tbl["_area_order"] = tbl["영역"].map(_AREA_ORDER).fillna(9)
+        tbl = tbl.sort_values(
+            ["_area_order", "priority_score_max"], ascending=[True, False]
+        ).reset_index(drop=True)
+        tbl.index = tbl.index + 1
 
-        # 앱별 Insight: 기준앱 + 경쟁앱
+        def _badge(text: str, area: str) -> str:
+            tc, bg = _AREA_STYLE.get(area, ("#94A3B8", "rgba(100,116,139,0.2)"))
+            return (
+                f'<span style="background:{bg};color:{tc};padding:2px 9px;'
+                f'border-radius:99px;font-size:0.73rem;font-weight:700;'
+                f'white-space:nowrap;">{text}</span>'
+            )
+
+        right_cols = {f"ΔOR ({base_app} 기준)", f"OR ({base_app})", "전략 우선도 점수"}
+        header_cols = ["전략 우선도", "기능 카테고리",
+                       f"ΔOR ({base_app} 기준)", f"OR ({base_app})", "전략 우선도 점수", "권장 액션"]
+
+        area_order_list = sorted(_AREA_ORDER.keys(), key=lambda a: _AREA_ORDER[a])
+
+        for area_name in area_order_list:
+            area_tbl = tbl[tbl["영역"] == area_name]
+            if area_tbl.empty:
+                continue
+
+            tc, bg = _AREA_STYLE.get(area_name, ("#94A3B8", "rgba(100,116,139,0.15)"))
+
+            # 영역 타이틀
+            st.markdown(
+                f'<div style="margin-top:1.4rem;margin-bottom:0.4rem;">'
+                f'<span style="background:{bg};color:{tc};padding:4px 14px;'
+                f'border-radius:6px 6px 0 0;font-size:0.82rem;font-weight:700;'
+                f'letter-spacing:0.03em;">▪ {area_name}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+            # 컬럼 헤더 (검정 배경)
+            header = (
+                '<thead><tr>'
+                + "".join(
+                    f'<th style="position:sticky;top:0;z-index:10;background:#000000;'
+                    f'padding:8px 12px;text-align:{"right" if h in right_cols else "left"};'
+                    f'font-size:0.78rem;color:#94A3B8;font-weight:600;white-space:nowrap;'
+                    f'border-bottom:1px solid rgba(255,255,255,0.12);">{h}</th>'
+                    for h in header_cols
+                )
+                + "</tr></thead>"
+            )
+
+            rows = ""
+            for seq, (rank, row) in enumerate(area_tbl.iterrows(), start=1):
+                action      = row["권장 액션"]
+                delta       = row["delta_or_mean"]
+                or_v        = row["or_mean"]
+                score       = row["priority_score_max"]
+                delta_color = "#4FD6A5" if delta >= 0 else "#FF8A9A"
+                row_bg      = "rgba(255,255,255,0.025)" if seq % 2 == 0 else "transparent"
+                rows += (
+                    f'<tr style="background:{row_bg};border-bottom:1px solid rgba(255,255,255,0.04);">'
+                    f'<td style="padding:7px 12px;text-align:center;font-size:0.8rem;color:#64748B;">{rank}</td>'
+                    f'<td style="padding:7px 12px;font-size:0.82rem;color:#E2E8F0;">{row["feature_category"]}</td>'
+                    f'<td style="padding:7px 12px;text-align:right;font-size:0.82rem;'
+                    f'color:{delta_color};font-weight:600;">{delta:+.4f}</td>'
+                    f'<td style="padding:7px 12px;text-align:right;font-size:0.82rem;color:#CBD5E1;">{or_v:.4f}</td>'
+                    f'<td style="padding:7px 12px;text-align:right;font-size:0.82rem;'
+                    f'color:#E2E8F0;font-weight:600;">{score:.4f}</td>'
+                    f'<td style="padding:7px 10px;">{_badge(action, area_name)}</td>'
+                    f'</tr>'
+                )
+
+            st.markdown(
+                '<div style="overflow-y:auto;border-radius:0 6px 6px 6px;'
+                f'border:1px solid {tc}33;margin-bottom:0.5rem;">'
+                '<table style="width:100%;border-collapse:collapse;">'
+                f'{header}<tbody>{rows}</tbody></table></div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── 사분면별 기능 분류 (Insight용) ────────────────────────────────────
+        q1 = tbl[tbl["영역"] == "경쟁 열위 · 개선 시급"]
+        q2 = tbl[tbl["영역"] == "경쟁 우위 유지"]
+        q3 = tbl[tbl["영역"] == "산업 공통 문제"]
+        q4 = tbl[tbl["영역"] == "현상 유지"]
+
+        def _cat_list(sub: pd.DataFrame, n: int = 3) -> str:
+            return ", ".join(f"<b>{r['feature_category']}</b>" for _, r in sub.head(n).iterrows()) or "없음"
+
         app_items = []
         base_color = app_color(base_app, app_names)
         app_items.append((
@@ -1088,7 +1240,10 @@ def _render_priority_section(combined_or: pd.DataFrame, app_names: list[str], ra
             sub_or = combined_or[combined_or["app_name"] == app_name] if not combined_or.empty else pd.DataFrame()
             if "OR" in sub_or.columns and not sub_or.empty:
                 top_adv = sub_or[sub_or.get("delta_or", pd.Series(dtype=float)) > 0].nlargest(1, "OR") if "delta_or" in sub_or.columns else pd.DataFrame()
-                adv_str = f"경쟁 우위 기능: <b>{top_adv.iloc[0]['feature_category']}</b> (OR={top_adv.iloc[0]['OR']:.2f})" if not top_adv.empty else ""
+                adv_str = (
+                    f"경쟁 우위 기능: <b>{top_adv.iloc[0]['feature_category']}</b> (OR={top_adv.iloc[0]['OR']:.2f})"
+                    if not top_adv.empty else ""
+                )
                 app_items.append((
                     app_name, color,
                     f"대비 앱 — {adv_str if adv_str else '유의미한 경쟁 우위 기능 없음'}. "
@@ -1097,23 +1252,22 @@ def _render_priority_section(combined_or: pd.DataFrame, app_names: list[str], ra
             else:
                 app_items.append((app_name, color, "OR 데이터 부족으로 상세 비교 불가."))
 
-        summary = (
-            f"<b>{base_app}</b>의 즉시 개선 영역(경쟁 열위 & 우선순위 높음): {_cat_list(q1, 5)}. "
-            f"경쟁 우위 유지 영역: {_cat_list(q2, 3)}. "
-            f"산업 공통 문제(경쟁사도 함께 약함): {_cat_list(q3, 3)}. "
-            f"좌상단 기능을 우선 개선하면 경쟁력 및 사용자 만족도를 동시에 높일 수 있습니다."
-        )
-
         render_insight_box(
-            f"기능 개선 우선순위 매트릭스 ({base_app} 기준)",
+            f"기능별 전략 우선도 매트릭스 ({base_app} 기준)",
             f"기준앱({base_app})의 OR과 경쟁사 평균 OR의 차이(ΔOR)와 취약도를 결합해 "
-            f"기능별 개선 우선순위를 산출합니다. ΔOR > 0이면 {base_app} 경쟁 우위, < 0이면 경쟁 열위.",
-            f"<b>좌상단(경쟁 열위 & 개선 시급)</b>: {base_app}이 경쟁사보다 약하면서 우선순위가 높은 기능 — 즉시 개선 효과 최대. "
-            f"<b>우상단(경쟁 우위 유지)</b>: 강점을 유지하며 현 수준을 고수할 영역. "
-            f"<b>좌하단(산업 공통 문제)</b>: 경쟁사도 함께 약한 기능 — 업계 전반적 개선 여지. "
-            f"<b>우하단(현상 유지)</b>: {base_app}이 강하지만 상대적 중요도 낮음.",
+            f"기능별 전략적 포지션을 4개 사분면으로 분류합니다. "
+            f"ΔOR > 0 = {base_app} 경쟁 우위(강점 유지), ΔOR < 0 = 경쟁 열위(개선 검토).",
+            f"<b>좌상단(경쟁 열위 · 개선 시급)</b>: {base_app}이 경쟁사보다 약하면서 전략 우선도가 높은 기능 — 즉시 개선 효과 최대. "
+            f"<b>우상단(경쟁 우위 유지)</b>: 강점 보유 영역 — 현 수준 유지 및 차별화 포인트 활용. "
+            f"<b>좌하단(산업 공통 문제)</b>: 경쟁사도 함께 약한 기능 — 선제 투자 시 차별화 가능. "
+            f"<b>우하단(현상 유지)</b>: {base_app}이 강하지만 상대적 우선도 낮음.",
             app_items,
-            summary=summary,
+            summary=(
+                f"개선 우선 검토(경쟁 열위 · 개선 시급) {len(q1)}개 · "
+                f"강점 유지(경쟁 우위 유지) {len(q2)}개 · "
+                f"모니터링(산업 공통 문제) {len(q3)}개 · "
+                f"현 수준 유지(현상 유지) {len(q4)}개."
+            ),
         )
 
     except Exception as e:
@@ -1155,6 +1309,9 @@ def render(
     # ── 섹션 2: VS 헤더 + 앱별 KPI ──────────────────────────────────────────
     st.divider()
     _render_vs_kpi_section(raw_df, app_names)
+
+    # ── 섹션 2-B: 긍정/부정 비율 도넛 차트 ─────────────────────────────────
+    _render_sentiment_donut(raw_df, app_names)
 
     # ── 섹션 3: 4종 워드클라우드 ────────────────────────────────────────────
     st.divider()

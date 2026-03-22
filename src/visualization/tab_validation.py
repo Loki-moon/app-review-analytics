@@ -22,7 +22,8 @@ import plotly.graph_objects as go
 import seaborn as sns
 import streamlit as st
 
-from config.settings import APP_COLORS, ASSETS_DIR
+from config.settings import ASSETS_DIR
+from src.visualization._common import app_color, get_ordered_app_names, render_skeleton
 
 # ── 한글 폰트 설정 (Streamlit Cloud 대응) ─────────────────────────────────────
 _BUNDLED_FONT = ASSETS_DIR / "fonts" / "NanumGothic.ttf"
@@ -232,7 +233,7 @@ def _render_summary(vr: dict[str, Any]) -> None:
 def _render_model_fit(vr: dict[str, Any]) -> None:
     mf = vr.get("model_fit", {})
     if not isinstance(mf, dict):
-        st.warning("모형 적합도 데이터가 없습니다.")
+        render_skeleton("모형 적합도를 계산중입니다", show_chart=True, chart_height=160)
         return
     table = mf.get("table", pd.DataFrame())
 
@@ -245,8 +246,17 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
     """, unsafe_allow_html=True)
 
     if table.empty:
-        st.warning("적합도 계산에 필요한 데이터가 부족합니다.")
+        render_skeleton("모형 적합도를 계산중입니다", show_chart=True, chart_height=160)
         return
+
+    # 앱 선택 순서에 맞게 게이지 정렬
+    _sel = st.session_state.get("selected_apps", [])
+    _order = {a.app_name: i for i, a in enumerate(_sel)}
+    if _order:
+        table = table.sort_values(
+            "app_name",
+            key=lambda s: s.map(lambda x: _order.get(x, 999)),
+        ).reset_index(drop=True)
 
     cols = st.columns(len(table))
     for i, (_, row) in enumerate(table.iterrows()):
@@ -408,15 +418,18 @@ def _render_coef_sig(vr: dict[str, Any]) -> None:
     """, unsafe_allow_html=True)
 
     if not isinstance(cs, pd.DataFrame) or cs.empty:
-        st.warning("유의성 분석 데이터가 없습니다.")
+        render_skeleton("회귀계수 유의성 분석중입니다", show_chart=False, n_rows=4)
         return
 
-    app_names = cs["app_name"].unique().tolist() if "app_name" in cs.columns else []
+    ordered_names = get_ordered_app_names(cs)
+    app_names = [n for n in ordered_names if n in (cs["app_name"].unique() if "app_name" in cs.columns else [])]
+    if not app_names:
+        app_names = cs["app_name"].unique().tolist() if "app_name" in cs.columns else []
 
     fig = go.Figure()
-    for i, app_name in enumerate(app_names):
+    for app_name in app_names:
         sub = cs[cs["app_name"] == app_name].copy()
-        color = APP_COLORS[i % len(APP_COLORS)]
+        color = app_color(app_name, ordered_names)
         sub["point_color"] = sub["p_value"].apply(lambda p: color if p < 0.05 else "#4A5568")
 
         fig.add_trace(go.Scatter(
@@ -466,10 +479,17 @@ def _render_coef_sig(vr: dict[str, Any]) -> None:
 
     fig.update_layout(
         title=dict(text=f"기능 키워드별 오즈비 (Forest Plot) — 흐린 점 = 비유의(p≥0.05){clip_note}",
-                   x=0.5, xanchor="center", font=dict(color=_TEXT, size=14)),
+                   x=0.5, xanchor="center", font=dict(color=_TEXT, size=13)),
         xaxis_title="오즈비 (OR)",
         height=max(350, len(cs["feature_category"].unique()) * 35 + 150),
         **LAYOUT_DEFAULTS,
+    )
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=55, b=80),
+        legend=dict(
+            bgcolor="#131820", bordercolor=_LINE, font=dict(color=_TEXT),
+            orientation="h", yanchor="top", y=-0.06, xanchor="center", x=0.5,
+        ),
     )
     st.plotly_chart(fig, use_container_width=True)
     _chart_download_btn(fig, "forest_plot_or")
@@ -538,10 +558,13 @@ def _render_interaction(vr: dict[str, Any], combined_or: pd.DataFrame) -> None:
             agg = delta_data.groupby("feature_category")["delta_or"].apply(lambda x: x.abs().max())
             cat_order = agg.sort_values(ascending=True).index.tolist()
 
+        ordered_names_ia = get_ordered_app_names(delta_data)
         fig = go.Figure()
-        for i, app_name in enumerate(delta_data["app_name"].unique()):
+        for app_name in (ordered_names_ia or delta_data["app_name"].unique().tolist()):
             sub = delta_data[delta_data["app_name"] == app_name].copy()
-            color = APP_COLORS[i % len(APP_COLORS)]
+            if sub.empty:
+                continue
+            color = app_color(app_name, ordered_names_ia)
 
             sig_labels = []
             if not ia.empty and "feature_category" in ia.columns:
@@ -583,12 +606,19 @@ def _render_interaction(vr: dict[str, Any], combined_or: pd.DataFrame) -> None:
 
         fig.update_layout(
             title=dict(text=f"기능별 ΔOR 비교 (*** p<0.001 · ** p<0.01 · * p<0.05){clip_note}",
-                       x=0.5, xanchor="center", font=dict(color=_TEXT, size=14)),
+                       x=0.5, xanchor="center", font=dict(color=_TEXT, size=13)),
             yaxis_title="기능 카테고리",
             xaxis_title="ΔOR (양수=기준앱 우위, 음수=열위)",
             barmode="group",
             height=max(420, n_cats * 32 + 150),
             **LAYOUT_DEFAULTS,
+        )
+        fig.update_layout(
+            margin=dict(l=10, r=10, t=55, b=80),
+            legend=dict(
+                bgcolor="#131820", bordercolor=_LINE, font=dict(color=_TEXT),
+                orientation="h", yanchor="top", y=-0.06, xanchor="center", x=0.5,
+            ),
         )
         if cat_order:
             fig.update_yaxes(categoryorder="array", categoryarray=cat_order)
@@ -635,7 +665,7 @@ def _render_interaction(vr: dict[str, Any], combined_or: pd.DataFrame) -> None:
 def _render_multicollinearity(vr: dict[str, Any]) -> None:
     mc = vr.get("multicol", {})
     if not isinstance(mc, dict):
-        st.warning("다중공선성 데이터가 없습니다.")
+        render_skeleton("다중공선성 분석중입니다", show_chart=True, chart_height=180)
         return
 
     corr_matrix = mc.get("corr_matrix", pd.DataFrame())
@@ -765,7 +795,7 @@ def _render_multicollinearity(vr: dict[str, Any]) -> None:
 def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
     sens = vr.get("threshold_sens", (pd.DataFrame(), pd.DataFrame()))
     if not isinstance(sens, tuple) or len(sens) != 2:
-        st.info("민감도 분석 데이터가 없습니다.")
+        render_skeleton("평점 이분화 민감도 분석중입니다", show_chart=True, chart_height=180)
         return
 
     combined, pivot = sens
@@ -821,10 +851,17 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
     conditions = combined["condition"].unique().tolist() if "condition" in combined.columns else []
     condition_colors = ["#4F8EF7", "#10B981", "#F59E0B"]
 
-    apps = combined["app_name"].unique().tolist() if "app_name" in combined.columns else []
-    selected_app = st.selectbox("앱 선택", apps, key="sens_app_select") if apps else None
+    # 선택한 순서대로 앱 목록 결정
+    available_apps: set[str] = set(combined["app_name"].unique()) if "app_name" in combined.columns else set()
+    ordered_apps = [
+        a.app_name for a in st.session_state.get("selected_apps", [])
+        if a.app_name in available_apps
+    ] or list(available_apps)
 
-    if selected_app:
+    for app_idx, selected_app in enumerate(ordered_apps):
+        if app_idx > 0:
+            st.divider()
+
         sub = combined[combined["app_name"] == selected_app]
         fig = go.Figure()
 
@@ -835,8 +872,12 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
             markers = []
             if not pivot.empty and "direction_consistent" in pivot.columns:
                 for cat in c_sub["feature_category"]:
-                    row = pivot[(pivot["feature_category"] == cat) & (pivot["app_name"] == selected_app)] if "app_name" in pivot.columns else pivot[pivot["feature_category"] == cat]
-                    consistent = row["direction_consistent"].values[0] if not row.empty else True
+                    p_row = (
+                        pivot[(pivot["feature_category"] == cat) & (pivot["app_name"] == selected_app)]
+                        if "app_name" in pivot.columns
+                        else pivot[pivot["feature_category"] == cat]
+                    )
+                    consistent = p_row["direction_consistent"].values[0] if not p_row.empty else True
                     markers.append("circle" if consistent else "x")
             else:
                 markers = ["circle"] * len(c_sub)
@@ -861,7 +902,7 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
             height=400,
             **LAYOUT_DEFAULTS,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"thresh_sens_{selected_app}_{app_idx}")
         _chart_download_btn(fig, f"threshold_sensitivity_{selected_app}")
 
         # 민감도 해석
@@ -900,7 +941,7 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
 def _render_period_stability(vr: dict[str, Any]) -> None:
     ps = vr.get("period_stab", (pd.DataFrame(), pd.DataFrame()))
     if not isinstance(ps, tuple) or len(ps) != 2:
-        st.info("기간 안정성 데이터가 없습니다.")
+        render_skeleton("기간 분할 안정성 분석중입니다", show_chart=True, chart_height=180)
         return
 
     combined, pivot = ps
@@ -1008,7 +1049,7 @@ def _render_period_stability(vr: dict[str, Any]) -> None:
 def _render_sample_distribution(vr: dict[str, Any]) -> None:
     sd = vr.get("sample_dist", {})
     if not isinstance(sd, dict) or not sd:
-        st.warning("표본 분포 데이터가 없습니다.")
+        render_skeleton("표본 분포를 분석중입니다", show_chart=True, chart_height=160)
         return
 
     st.markdown("""
@@ -1031,13 +1072,16 @@ def _render_sample_distribution(vr: dict[str, Any]) -> None:
         st.markdown("**평점 분포**")
         if not score_dist.empty:
             fig_score = go.Figure()
-            for i, app_name in enumerate(score_dist["app_name"].unique() if "app_name" in score_dist.columns else []):
+            _ordered_sd = get_ordered_app_names(score_dist)
+            for app_name in (_ordered_sd or score_dist["app_name"].unique().tolist()):
                 sub = score_dist[score_dist["app_name"] == app_name]
+                if sub.empty:
+                    continue
                 fig_score.add_trace(go.Bar(
                     name=str(app_name),
                     x=sub["score"].tolist(),
                     y=sub["count"].tolist(),
-                    marker_color=APP_COLORS[i % len(APP_COLORS)],
+                    marker_color=app_color(app_name, _ordered_sd),
                     hovertemplate=f"<b>{app_name}</b><br>평점: %{{x}}점<br>건수: %{{y:,}}건<extra></extra>",
                 ))
             fig_score.update_layout(
@@ -1073,14 +1117,17 @@ def _render_sample_distribution(vr: dict[str, Any]) -> None:
         st.markdown("**월별 리뷰 수 추이**")
         if not monthly.empty:
             fig_monthly = go.Figure()
-            for i, app_name in enumerate(monthly["app_name"].unique() if "app_name" in monthly.columns else []):
+            _ordered_mn = get_ordered_app_names(monthly)
+            for app_name in (_ordered_mn or monthly["app_name"].unique().tolist()):
                 sub = monthly[monthly["app_name"] == app_name]
+                if sub.empty:
+                    continue
                 fig_monthly.add_trace(go.Scatter(
                     name=str(app_name),
                     x=sub["year_month"].tolist(),
                     y=sub["count"].tolist(),
                     mode="lines+markers",
-                    line=dict(color=APP_COLORS[i % len(APP_COLORS)], width=2),
+                    line=dict(color=app_color(app_name, _ordered_mn), width=2),
                     hovertemplate=f"<b>{app_name}</b><br>월: %{{x}}<br>리뷰 수: %{{y:,}}건<extra></extra>",
                 ))
             fig_monthly.update_layout(
@@ -1178,7 +1225,7 @@ def render(
     """, unsafe_allow_html=True)
 
     if not vr:
-        st.warning("검증 데이터가 없습니다. 분석을 먼저 실행해주세요.")
+        render_skeleton("통계 검증 데이터를 분석중입니다", show_chart=True, n_rows=4, chart_height=180)
         return
 
     _render_summary(vr)
@@ -1186,20 +1233,20 @@ def render(
     with st.expander("1️⃣ 모형 적합도 (Model Fit)", expanded=True):
         _render_model_fit(vr)
 
-    with st.expander("2️⃣ 회귀계수 유의성 (Coefficient Significance)"):
+    with st.expander("2️⃣ 회귀계수 유의성 (Coefficient Significance)", expanded=True):
         _render_coef_sig(vr)
 
-    with st.expander("3️⃣ 서비스 간 영향력 차이 검정 (Interaction Effect Test)"):
+    with st.expander("3️⃣ 서비스 간 영향력 차이 검정 (Interaction Effect Test)", expanded=True):
         _render_interaction(vr, combined_or)
 
-    with st.expander("4️⃣ 다중공선성 (Multicollinearity)"):
+    with st.expander("4️⃣ 다중공선성 (Multicollinearity)", expanded=True):
         _render_multicollinearity(vr)
 
-    with st.expander("5️⃣ 평점 이분화 기준 민감도 (Threshold Sensitivity)"):
+    with st.expander("5️⃣ 평점 이분화 기준 민감도 (Threshold Sensitivity)", expanded=True):
         _render_threshold_sensitivity(vr)
 
-    with st.expander("6️⃣ 기간 분할 안정성 (Period Stability)"):
+    with st.expander("6️⃣ 기간 분할 안정성 (Period Stability)", expanded=True):
         _render_period_stability(vr)
 
-    with st.expander("7️⃣ 표본 분포 (Sample Distribution)"):
+    with st.expander("7️⃣ 표본 분포 (Sample Distribution)", expanded=True):
         _render_sample_distribution(vr)
