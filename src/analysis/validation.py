@@ -64,12 +64,16 @@ def compute_model_fit(df: pd.DataFrame, feature_cols: list[str]) -> dict[str, An
         if len(reg_df) < 30:
             continue
 
-        valid_feats = [c for c in feature_cols if reg_df[c].sum() >= 5]
+        # 언급 수 >= 3인 기능만 전체 모형에 포함 (singular matrix 방지)
+        valid_feats = [c for c in feature_cols if reg_df[c].sum() >= 3]
         if not valid_feats:
             continue
 
+        # 분산이 없는 통제변수 제거 (상수 컬럼 → singular matrix 원인)
+        active_ctrl = [v for v in control_vars if reg_df[v].nunique() > 1]
+
         feat_str = " + ".join(valid_feats)
-        ctrl_str = (" + " + " + ".join(control_vars)) if control_vars else ""
+        ctrl_str = (" + " + " + ".join(active_ctrl)) if active_ctrl else ""
         formula = f"sentiment_binary ~ {feat_str}{ctrl_str}"
 
         try:
