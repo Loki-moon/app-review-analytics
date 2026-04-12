@@ -342,6 +342,9 @@ def _build_center_zoom(
     _pos2["priority_score_max"] = center_df["_y_display"]
     text_positions = _smart_text_pos(_pos2, "_x", "priority_score_max")
 
+    base_label = f"{base_app} 기준" if base_app else "기준선"
+    base_or_label = f"OR ({base_app})" if base_app else "OR (기준앱)"
+
     for _, row in center_df.iterrows():
         cat    = row["feature_category"]
         x_raw  = row["delta_or_mean"]
@@ -360,8 +363,17 @@ def _build_center_zoom(
             "모니터링"      if (x_raw < 0 and y_val < y_mid) else
             "현 수준 유지"
         )
+        pos_label = "→ 경쟁 우위" if x_raw >= 0 else "→ 경쟁 열위"
+        delta_label = f"ΔOR ({base_label}): {x_raw:+.3f}  {pos_label}"
         tpos  = "bottom center" if yc else text_positions.get(cat, "top center")
         clamp_note = f"<br><i>표시 범위 밖 (실제 점수={y_val:.3f})</i>" if yc else ""
+
+        # 앱별 OR 상세 (app_or_data 활용)
+        or_detail = ""
+        if not app_or_data.empty:
+            sub = app_or_data[app_or_data["feature_category"] == cat]
+            for _, r2 in sub.iterrows():
+                or_detail += f"  {r2['app_name']}: OR={r2['OR']:.3f}<br>"
 
         fig.add_trace(go.Scatter(
             x=[x_raw], y=[y_disp],
@@ -374,19 +386,29 @@ def _build_center_zoom(
             name=cat, showlegend=False,
             hovertemplate=(
                 f"<b>{cat}</b><br>"
-                f"ΔOR: {x_raw:+.3f} ({'경쟁 우위' if x_raw >= 0 else '경쟁 열위'})<br>"
+                f"{delta_label}<br>"
                 f"전략 우선도 점수: {y_val:.3f}<br>"
-                f"OR (기준앱): {or_val:.3f}<br>"
-                f"권장 액션: <b>{action}</b>{clamp_note}<extra></extra>"
+                f"{base_or_label}: {or_val:.3f}<br>"
+                f"권장 액션: <b>{action}</b>{clamp_note}<br>{or_detail}"
+                "<extra></extra>"
             ),
         ))
 
+    zoom_title = (
+        f"중앙 구간 확대 — {base_label} |ΔOR| ≤ {zoom_limit:.1f} (선형 스케일)"
+        if base_app else
+        f"중앙 구간 확대 — |ΔOR| ≤ {zoom_limit:.1f} (선형 스케일)"
+    )
+    x_axis_title = (
+        f"← {base_app} 경쟁 열위 &nbsp;|&nbsp; ΔOR (선형 스케일) &nbsp;|&nbsp; {base_app} 경쟁 우위 →"
+        if base_app else
+        "ΔOR (선형 스케일) — ← 경쟁 열위 | 경쟁 우위 →"
+    )
+
     fig.update_layout(
-        title=centered_title(
-            f"중앙 구간 확대 — |ΔOR| ≤ {zoom_limit:.1f} (선형 스케일)", size=13
-        ),
-        xaxis_title="ΔOR (선형 스케일) — ← 경쟁 열위 | 경쟁 우위 →",
-        yaxis_title="전략 우선도 점수",
+        title=centered_title(zoom_title, size=13),
+        xaxis_title=x_axis_title,
+        yaxis_title="전략 우선도 점수 (개선 시급성 + 강점 유지 중요도)",
         height=560,
         hovermode="closest",
         margin=dict(l=10, r=30, t=60, b=60),
@@ -400,21 +422,46 @@ def _build_center_zoom(
 def render(combined: pd.DataFrame) -> None:
     st.markdown("""
     <div class="info-box">
-    기능별 전략 우선도 매트릭스입니다.<br>
-    <b>ΔOR &gt; 0</b>이면 기준앱 <b>경쟁 우위</b> (→ 강점 유지),
-    <b>ΔOR &lt; 0</b>이면 <b>경쟁 열위</b> (→ 개선 우선 검토)입니다.<br>
-    전략 우선도 점수는 <b>개선 시급성</b>과 <b>강점 유지 중요도</b>를 함께 반영한 종합 지표입니다.
-    경쟁 우위 기능이 높은 점수를 받더라도 이는 강점을 유지해야 함을 의미합니다.
+    <b>기능별 전략 우선도 매트릭스</b>는 어떤 기능을 먼저 개선해야 하는지, 어떤 기능이 현재 강점인지를
+    한 눈에 보여주는 2차원 전략 지도입니다.<br><br>
+    • <b>가로축 (ΔOR)</b>: 기준 앱 대비 경쟁 우위/열위를 나타냅니다.
+    ΔOR = 비교 앱 OR − 기준 앱 OR이며, 오른쪽(+)일수록 기준 앱이 경쟁 우위, 왼쪽(−)일수록 경쟁 열위입니다.<br>
+    • <b>세로축 (전략 우선도 점수)</b>: 개선 시급성과 강점 유지 중요도를 종합한 점수입니다.
+    위로 갈수록 전략적으로 더 중요한 기능입니다.<br>
+    • <b>마커 크기</b>: 전략 우선도 점수에 비례합니다. 큰 원일수록 해당 기능의 중요도가 높습니다.<br><br>
+    <b>4개 사분면 해석:</b>
+    &nbsp;좌상 <span style="color:#FF8A9A">경쟁 열위·개선 시급</span> — 즉시 개선 필요 /
+    &nbsp;우상 <span style="color:#4FD6A5">경쟁 우위 유지</span> — 현재 강점, 차별화 포인트 /
+    &nbsp;좌하 <span style="color:#FBB55C">산업 공통 문제</span> — 경쟁사도 약함, 선제 투자 시 차별화 가능 /
+    &nbsp;우하 <span style="color:#7BA7F5">현상 유지</span> — 우위이나 우선순위 낮음, 모니터링
     </div>
     """, unsafe_allow_html=True)
 
     if combined.empty or "delta_or" not in combined.columns:
+        st.markdown("""
+        <div class="info-box" style="border-left-color:#F59E0B;">
+        ⚠️ <b>전략 우선도 매트릭스를 표시하려면 최소 2개 앱의 OR 분석이 필요합니다.</b><br><br>
+        가능한 원인:<br>
+        &nbsp;&nbsp;① 왼쪽 사이드바에서 <b>앱을 2개 이상 선택</b>해야 ΔOR(오즈비 차이)을 계산할 수 있습니다.<br>
+        &nbsp;&nbsp;② 오즈비(OR) 탭에서 먼저 분석이 완료되어야 이 탭이 활성화됩니다.<br>
+        &nbsp;&nbsp;③ 선택한 앱들의 리뷰에서 <b>공통으로 등장하는 기능 키워드</b>가 없으면 ΔOR 계산이 불가능합니다.<br><br>
+        앱 선택 후 OR 분석이 완료되면 이 화면이 자동으로 매트릭스로 전환됩니다.
+        </div>
+        """, unsafe_allow_html=True)
         render_skeleton("전략 우선도 매트릭스를 분석중입니다", show_chart=True, chart_height=260)
         return
 
     matrix_df = get_priority_matrix_df(combined)
 
     if matrix_df.empty:
+        st.markdown("""
+        <div class="info-box" style="border-left-color:#F59E0B;">
+        ⚠️ <b>전략 우선도 점수 계산 결과가 없습니다.</b><br>
+        앱 간 공통 기능 카테고리에서 유효한 ΔOR 값이 계산되지 않았습니다.
+        각 앱에서 같은 기능 키워드가 충분히 언급되어야(최소 2건 이상) 비교가 가능합니다.
+        OR 탭에서 각 앱의 분석 결과를 먼저 확인해 보세요.
+        </div>
+        """, unsafe_allow_html=True)
         render_skeleton("전략 우선도 매트릭스를 분석중입니다", show_chart=True, chart_height=260)
         return
 
@@ -468,7 +515,9 @@ def render(combined: pd.DataFrame) -> None:
     if fig_zoom is not None:
         st.markdown(
             '<div style="font-size:0.78rem;color:#64748B;margin-top:-0.5rem;margin-bottom:0.3rem;">'
-            f'▼ 중앙 밀집 구간 확대 — |ΔOR| ≤ {zoom_limit:.1f} 범위를 선형 스케일로 표시합니다.'
+            f'▼ <b>중앙 구간 확대 차트</b> — |ΔOR| ≤ {zoom_limit:.1f} 범위만 선형 스케일로 표시합니다. '
+            'ΔOR 값이 작아 위 메인 차트에서 겹쳐 보이는 기능들을 더 명확하게 구분할 수 있습니다. '
+            '마커 위에 마우스를 올리면 각 앱의 OR 수치도 확인할 수 있습니다.'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -484,30 +533,37 @@ def render(combined: pd.DataFrame) -> None:
         return "、".join(sub["feature_category"].head(n).tolist()) or "없음"
 
     render_insight_box(
-        "기능별 전략 우선도 매트릭스",
+        "기능별 전략 우선도 매트릭스 핵심 인사이트",
         "ΔOR(경쟁 우위/열위)과 전략 우선도 점수(개선 시급성 + 강점 유지 중요도)를 결합해 "
-        "기능별 전략적 포지션을 4개 사분면으로 분류합니다.",
-        "ΔOR > 0 = 경쟁 우위(강점 유지), ΔOR < 0 = 경쟁 열위(개선 검토). "
-        "전략 우선도 점수는 '개선해야 할 기능'과 '지켜야 할 강점'을 함께 반영한 종합 지표입니다.",
+        "기능별 전략적 포지션을 4개 사분면으로 분류합니다. "
+        "ΔOR = 비교 앱 OR − 기준 앱 OR이며, 음수일수록 기준 앱이 경쟁에서 밀리는 기능입니다. "
+        "전략 우선도 점수는 사용자 영향력과 경쟁 격차를 종합한 수치로, 높을수록 먼저 대응해야 합니다.",
+        f"총 {len(tbl)}개 기능 중 즉시 개선이 필요한 '경쟁 열위·개선 시급' 영역 {len(q1)}개, "
+        f"강점으로 유지해야 할 '경쟁 우위 유지' 영역 {len(q2)}개가 확인됩니다. "
+        "아래 상세 테이블에서 각 기능의 ΔOR 수치와 권장 액션을 확인하세요.",
         [
             ("경쟁 열위 · 개선 시급", "#FF8A9A",
-             f"총 {len(q1)}개 기능 — 경쟁사보다 약하고 전략 우선도가 높아 즉시 개선 효과 최대. "
+             f"총 {len(q1)}개 기능 — ΔOR &lt; 0이고 전략 우선도가 높아 즉시 개선 시 만족도 향상 효과가 가장 큽니다. "
+             f"경쟁사 대비 뒤처지는 영역이므로 로드맵 최우선 과제로 설정하세요. "
              f"주요 기능: {_feat_list(q1)}"),
             ("경쟁 우위 유지", "#4FD6A5",
-             f"총 {len(q2)}개 기능 — 기준앱 강점 보유 영역. 강점을 유지하며 차별화 포인트로 활용. "
+             f"총 {len(q2)}개 기능 — ΔOR &gt; 0이고 전략 우선도가 높아 현재 기준 앱의 핵심 강점입니다. "
+             f"이 기능의 품질을 유지·강화하면 차별화 포인트로 마케팅에 활용할 수 있습니다. "
              f"주요 기능: {_feat_list(q2)}"),
             ("산업 공통 문제", "#FBB55C",
-             f"총 {len(q3)}개 기능 — 경쟁사도 함께 약한 영역. 선제 투자 시 차별화 가능. "
+             f"총 {len(q3)}개 기능 — ΔOR &lt; 0이지만 전략 우선도가 낮아 경쟁사도 함께 약한 영역입니다. "
+             f"업계 전체의 미해결 과제이므로, 선제적으로 개선하면 경쟁사 대비 차별화가 가능합니다. "
              f"주요 기능: {_feat_list(q3)}"),
             ("현상 유지", "#7BA7F5",
-             f"총 {len(q4)}개 기능 — 기준앱이 강하지만 상대적 우선도 낮음. 현재 수준 유지·모니터링. "
+             f"총 {len(q4)}개 기능 — ΔOR &gt; 0이지만 전략 우선도가 낮아 현재는 유지만으로 충분한 영역입니다. "
+             f"자원이 여유로울 때 모니터링하며 점진적으로 개선하세요. "
              f"주요 기능: {_feat_list(q4)}"),
         ],
         summary=(
-            f"개선 우선 검토(경쟁 열위 · 개선 시급) {len(q1)}개 · "
-            f"강점 유지(경쟁 우위 유지) {len(q2)}개 · "
-            f"모니터링(산업 공통 문제) {len(q3)}개 · "
-            f"현 수준 유지(현상 유지) {len(q4)}개."
+            f"🔴 즉시 개선(경쟁 열위·개선 시급) {len(q1)}개 · "
+            f"🟢 강점 유지(경쟁 우위 유지) {len(q2)}개 · "
+            f"🟡 선제 투자 검토(산업 공통 문제) {len(q3)}개 · "
+            f"🔵 현 수준 유지(현상 유지) {len(q4)}개."
         ),
     )
 

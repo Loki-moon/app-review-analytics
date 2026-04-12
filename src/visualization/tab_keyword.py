@@ -99,12 +99,24 @@ def _tokens_to_counter(token_lists: list[list[str]]) -> Counter:
 def render(df: pd.DataFrame) -> None:
     st.markdown("""
     <div class="info-box">
-    리뷰에서 자주 등장하는 키워드를 시각화합니다. 평점 구간별로 사용자 인식 차이를 확인하세요.
+    <b>☁️ 키워드 탐색 — 리뷰 텍스트에서 자주 등장하는 단어를 시각화합니다.</b><br><br>
+    <b>읽는 법:</b><br>
+    · 워드클라우드에서 <b>단어가 클수록</b> 해당 리뷰 구간에서 더 자주 등장한 단어입니다<br>
+    · <b>🔵 전체</b>: 모든 리뷰의 관심사 / <b>🟢 긍정</b>: 만족 요인 / <b>🔴 부정</b>: 불만 원인 — 이 세 구간을 비교하면 가장 많은 인사이트를 얻을 수 있습니다<br>
+    · <b>공통 키워드 보기</b>: 여러 앱 모두에서 등장하는 단어만 필터링해 공통 이슈를 확인<br><br>
+    <b>활용 팁:</b> 긍정 키워드에 "빠른", "편리"가 자주 보이면 속도·편의성이 강점이고,
+    부정 키워드에 "오류", "안됨"이 많으면 기능 안정성이 핵심 개선 과제입니다.
     </div>
     """, unsafe_allow_html=True)
 
     if df.empty or "tokens" not in df.columns:
-        render_skeleton("키워드 데이터를 분석중입니다", show_chart=True, n_rows=3)
+        st.markdown("""
+        <div class="info-box" style="border-left:4px solid #F59E0B;">
+        ⚠️ <b>키워드 데이터가 없습니다.</b><br>
+        분석이 완료된 후에 표시됩니다. 리뷰 수가 너무 적거나 형태소 분석에 실패했을 수 있어요.<br>
+        리뷰를 10건 이상 수집한 후 다시 분석해주세요.
+        </div>
+        """, unsafe_allow_html=True)
         return
 
     # tokens 컬럼이 문자열로 저장된 경우 리스트로 복원
@@ -128,7 +140,10 @@ def render(df: pd.DataFrame) -> None:
     # ── 공통 키워드만 보기 옵션 (전체 선택 시만 활성) ────────────────────────
     common_only = False
     if selected_app == "전체" and len(app_names) >= 2:
-        common_only = st.checkbox("공통 키워드만 보기 (모든 앱에 등장한 키워드)")
+        common_only = st.checkbox(
+            "공통 키워드만 보기 (모든 앱에서 공통으로 등장한 키워드)",
+            help="여러 앱이 공통으로 언급하는 키워드는 업계 전반의 공통 이슈 또는 사용자들이 공통으로 중요하게 여기는 기능입니다.",
+        )
 
     if common_only:
         # 앱별 상위 키워드 교집합
@@ -180,7 +195,13 @@ def render(df: pd.DataFrame) -> None:
                 counter = _tokens_to_counter(token_lists)
 
                 if not counter:
-                    st.caption("해당 구간의 리뷰가 없습니다.")
+                    empty_msg = {
+                        "🔵 전체 키워드":         "전체 리뷰 토큰이 없습니다.",
+                        "🟢 긍정 키워드 (4~5점)": "4~5점 리뷰가 없거나 분석 가능한 키워드가 없습니다.",
+                        "🟡 보통 키워드 (3점)":   "3점 리뷰가 없거나 분석 가능한 키워드가 없습니다.",
+                        "🔴 부정 키워드 (1~2점)": "1~2점 리뷰가 없거나 분석 가능한 키워드가 없습니다. 리뷰 수집 기간을 늘려보세요.",
+                    }
+                    st.caption(empty_msg.get(title, "해당 구간의 리뷰가 없습니다."))
                     continue
 
                 img_bytes = _make_wordcloud(counter, title="", bg_color=_BG, colormap=cmap)
@@ -189,18 +210,25 @@ def render(df: pd.DataFrame) -> None:
 
                 top5 = counter.most_common(5)
                 if top5:
-                    top_words = " · ".join(f"<b>{w}</b>({c})" for w, c in top5[:3])
+                    top_words = " · ".join(f"<b>{w}</b>({c:,}회)" for w, c in top5[:3])
                     total_tokens = sum(counter.values())
                     top3_pct = sum(c for _, c in top5[:3]) / total_tokens * 100 if total_tokens > 0 else 0
+                    unique_words = len(counter)
                     item_color = app_color(selected_app, app_names) if selected_app != "전체" else "#4F8EF7"
+
+                    _interp_guide = {
+                        "🔵 전체 키워드":         "가장 빈번한 단어가 이 앱 사용자들의 핵심 관심사입니다. 기능 키워드(결제·송금·인증 등)가 상위에 보이면 OR 분석 결과와 교차 검토하세요.",
+                        "🟢 긍정 키워드 (4~5점)": "만족한 사용자가 자주 쓴 단어 = 이 앱의 강점 시그널입니다. 마케팅 메시지나 강점 유지 전략에 활용하세요.",
+                        "🟡 보통 키워드 (3점)":   "중립 리뷰의 키워드는 '아쉽지만 쓸 만하다'는 감정을 담고 있습니다. 이 단어들이 개선되면 긍정으로 전환될 가능성이 높습니다.",
+                        "🔴 부정 키워드 (1~2점)": "불만족 사용자가 반복 언급한 단어 = 시급한 개선 과제입니다. 이 키워드들은 OR 분석의 부정 연관 기능과 함께 확인하세요.",
+                    }
                     render_insight_box(
                         title,
                         _purpose.get(title, ""),
                         _effect.get(title, ""),
                         [(display_name, item_color,
-                          f"상위 3개 키워드: {top_words}. "
-                          f"전체 {total_tokens:,}개 토큰 중 {top3_pct:.0f}% 차지. "
-                          f"자주 등장하는 단어일수록 사용자 관심이 집중된 주제입니다.")],
+                          f"상위 3개: {top_words} — 전체 {total_tokens:,}개 토큰 중 {top3_pct:.0f}% 차지 (고유 단어 {unique_words:,}개). "
+                          + _interp_guide.get(title, "자주 등장하는 단어일수록 사용자 관심이 집중된 주제입니다."))],
                     )
 
                 with st.expander("상위 키워드 표 보기", expanded=True):

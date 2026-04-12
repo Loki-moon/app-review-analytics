@@ -156,6 +156,18 @@ def _render_distribution_section(raw_df: pd.DataFrame, app_names: list[str]) -> 
     days_span  = (end_date - start_date).days if start_date and end_date else 30
     use_daily  = days_span < 30
 
+    st.markdown(f"""
+    <div class="info-box" style="background:#131820;border-left:4px solid #4F8EF7;border-radius:6px;padding:0.7rem 1rem;margin-bottom:0.7rem;font-size:0.82rem;color:#94A3B8;">
+    <b style="color:#93C5FD;">이 차트들은 무엇을 보여주나요?</b><br>
+    &bull; <b>평점별 리뷰 분포 (좌)</b>: 각 앱의 1~5점 리뷰가 어떻게 분포하는지 비교합니다.
+    5점 리뷰가 압도적으로 많은 앱은 충성 사용자층이 두텁거나 긍정 리뷰 유도 정책이 있을 수 있으므로 분포 전체를 함께 살펴야 합니다.
+    1~2점 비율이 높은 앱은 즉각적인 UX·기능 개선이 필요합니다.<br>
+    &bull; <b>{'일별' if use_daily else '월별'} 리뷰 수 추이 (우)</b>: 리뷰 수의 시간 흐름을 파악합니다.
+    특정 시점에 급증한 리뷰는 앱 업데이트, 마케팅 캠페인, 또는 장애 이벤트와 연결된 경우가 많습니다.
+    비교 앱 간 수집 기간·수량 격차가 클 경우 OR 분석 결과의 신뢰도 차이가 발생할 수 있습니다.
+    </div>
+    """, unsafe_allow_html=True)
+
     col1, col2 = st.columns(2)
     with col1:
         st.plotly_chart(_score_dist_chart(raw_df, app_names), use_container_width=True)
@@ -197,19 +209,41 @@ def _render_distribution_section(raw_df: pd.DataFrame, app_names: list[str]) -> 
     # 종합
     totals = {an: len(raw_df[raw_df["app_name"] == an]) for an in app_names}
     most_reviewed = max(totals, key=totals.get)
-    summary = (
-        f"가장 많은 리뷰를 보유한 앱: <b>{most_reviewed}</b>({totals[most_reviewed]:,}건). "
-        + ("부정 비율이 높은 앱들로 개선 여지가 큽니다." if any(
-            (raw_df[raw_df["app_name"] == an]["score"] <= 2).sum() / max(len(raw_df[raw_df["app_name"] == an]), 1) > 0.5
-            for an in app_names
-        ) else "전반적인 데이터 수집이 완료되었습니다.")
-    )
+
+    # 평균 평점 비교 (점수 기준 정렬)
+    avg_scores = {}
+    for an in app_names:
+        sub = raw_df[raw_df["app_name"] == an]
+        avg_scores[an] = sub["score"].mean() if "score" in sub.columns and len(sub) > 0 else 0.0
+    best_rated = max(avg_scores, key=avg_scores.get)
+    worst_rated = min(avg_scores, key=avg_scores.get)
+
+    # 부정 비율 경고 앱
+    high_neg_apps = [
+        an for an in app_names
+        if "score" in raw_df.columns and
+        (raw_df[raw_df["app_name"] == an]["score"] <= 2).sum() / max(totals[an], 1) > 0.3
+    ]
+
+    summary_parts = [
+        f"리뷰 수 1위: <b>{most_reviewed}</b>({totals[most_reviewed]:,}건) — OR 분석 신뢰도 가장 높음.",
+        f"평균 평점 1위: <b>{best_rated}</b>({avg_scores[best_rated]:.2f}점) / "
+        f"최저: <b>{worst_rated}</b>({avg_scores[worst_rated]:.2f}점).",
+    ]
+    if high_neg_apps:
+        summary_parts.append(
+            f"부정 비율 30% 초과 앱: <b>{'  /  '.join(high_neg_apps)}</b> — 즉각적인 개선 검토 필요."
+        )
+    else:
+        summary_parts.append("전체적으로 부정 비율이 30% 미만 — 기본 데이터 품질은 양호합니다.")
+
     render_insight_box(
         "리뷰 분포 개요",
-        "수집된 리뷰의 평점 분포와 시간 추이를 파악합니다.",
-        "데이터 편향 여부와 특정 시점의 이상 급증을 확인할 수 있어요.",
+        "수집된 리뷰의 평점 분포와 시간 추이를 파악해 데이터 품질과 앱별 사용자 반응의 전반적 수준을 점검합니다.",
+        "리뷰 수가 적거나 특정 평점에 편중된 앱은 이후 OR·ΔOR 분석 결과의 신뢰도가 낮을 수 있으니 "
+        "표본 크기를 함께 고려하세요.",
         items,
-        summary=summary,
+        summary=" ".join(summary_parts),
     )
 
 
@@ -257,15 +291,16 @@ def _render_vs_kpi_section(raw_df: pd.DataFrame, app_names: list[str]) -> None:
                 unsafe_allow_html=True,
             )
             # KPI 데이터
-            date_part = f" ({date_str})" if date_str else ""
             plat_part = f" ({plat_str})" if plat_str else ""
+            avg_label = "양호" if avg_score >= 4.0 else ("중립" if avg_score >= 3.0 else "개선 필요")
             st.markdown(
                 f'<div style="font-size:0.83rem;color:#CBD5E1;line-height:2.0;'
                 f'padding:0.5rem 0.75rem;background:#131820;border-radius:6px;'
                 f'border-left:3px solid {color};margin-bottom:8px;">'
                 f'<span style="font-size:0.72rem;color:{SUBTEXT};">{date_str}</span><br>'
                 f'- 리뷰 수 : <b>{total:,} 건</b>{plat_part}<br>'
-                f'- 평균 평점 : <b>{avg_score:.2f} ⭐</b><br>'
+                f'- 평균 평점 : <b>{avg_score:.2f} ⭐</b>'
+                f' <span style="font-size:0.72rem;color:{SUBTEXT};">({avg_label})</span><br>'
                 f'- 긍정 리뷰 : <b style="color:#4FD6A5;">{pos_pct:.0f}%</b>'
                 f' <span style="color:#94A3B8;">({pos_n:,}건)</span><br>'
                 f'- 부정 리뷰 : <b style="color:#FF6B8A;">{neg_pct:.0f}%</b>'
@@ -1304,6 +1339,18 @@ def render(
 
     # ── 섹션 1: 리뷰 분포 개요 ──────────────────────────────────────────────
     st.markdown("### 앱 비교 분석")
+    st.markdown(f"""
+    <div class="info-box" style="background:#131820;border-left:4px solid #4F8EF7;border-radius:6px;padding:0.75rem 1rem;margin-bottom:0.9rem;font-size:0.82rem;color:#94A3B8;">
+    <b style="color:#93C5FD;">비교 분석 구성 안내</b><br>
+    이 화면은 <b>{' / '.join(app_names)}</b> {len(app_names)}개 앱을 6단계로 비교합니다.<br>
+    &bull; <b>섹션 1 (리뷰 분포)</b>: 수집된 리뷰의 평점 분포와 시간 추이 — 데이터 품질·편향 확인<br>
+    &bull; <b>섹션 2 (KPI 비교)</b>: 앱별 총 리뷰 수·평균 평점·긍정/부정 비율 — 전체 건강도 스냅샷<br>
+    &bull; <b>섹션 3 (워드클라우드)</b>: 긍정/부정 키워드 비교 — 각 앱의 강점·약점 주제 파악<br>
+    &bull; <b>섹션 4 (OR 비교)</b>: 기능별 오즈비 — 어느 앱이 어떤 기능에서 사용자 만족도가 높은가<br>
+    &bull; <b>섹션 5 (ΔOR)</b>: 기준 앱 대비 경쟁 우위/열위 기능 — 어디를 먼저 개선해야 하는가<br>
+    &bull; <b>섹션 6 (우선순위 매트릭스)</b>: 4분면 전략 포지션 — 개선 효과 최대화 우선순위 결정
+    </div>
+    """, unsafe_allow_html=True)
     _render_distribution_section(raw_df, app_names)
 
     # ── 섹션 2: VS 헤더 + 앱별 KPI ──────────────────────────────────────────

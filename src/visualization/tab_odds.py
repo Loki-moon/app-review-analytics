@@ -201,20 +201,36 @@ def _app_or_table(df: pd.DataFrame, app_name: str) -> None:
         table_df["유의성"] = table_df["p_value"].apply(_significance_label)
     col_rename = {
         "feature_category": "기능 카테고리",
-        "OR": "오즈비", "ci_lower": "95% CI 하한", "ci_upper": "95% CI 상한",
+        "OR": "오즈비 (OR)", "ci_lower": "95% CI 하한", "ci_upper": "95% CI 상한",
         "p_value": "p-value", "n_reviews": "리뷰 수", "method": "분석방법",
     }
     # method 값 한글화
     if "method" in table_df.columns:
-        table_df["method"] = table_df["method"].map({"logit": "로지스틱회귀", "fisher": "피셔검정"}).fillna(table_df["method"])
+        table_df["method"] = table_df["method"].map(
+            {"logit": "로지스틱회귀", "fisher": "피셔검정"}
+        ).fillna(table_df["method"])
+
+    n_sig = (table_df["p_value"] < 0.05).sum() if "p_value" in table_df.columns else 0
+    n_total = len(table_df)
+    st.caption(
+        f"{app_name} — 총 {n_total}개 기능 카테고리 중 {n_sig}개가 통계적으로 유의(p < 0.05)합니다. "
+        "'오즈비(OR)' 기준 내림차순 정렬 | '유의성' 열: *** p<0.001, ** p<0.01, * p<0.05, n.s. 비유의"
+    )
     st.dataframe(table_df.rename(columns=col_rename), use_container_width=True, height=360)
 
 
 def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
     st.markdown("""
     <div class="info-box">
-    오즈비(OR)는 해당 기능이 리뷰에 언급될 때 긍정 평가와 얼마나 연관되는지 나타냅니다.<br>
-    <b>OR > 1</b>이면 긍정과 더 연관, <b>OR &lt; 1</b>이면 부정과 더 연관됩니다.
+    <b>오즈비(OR, Odds Ratio)</b>는 특정 기능이 리뷰에 언급됐을 때 긍정 평가(4~5점)가 나올 확률이
+    언급되지 않은 리뷰 대비 몇 배나 높은지를 나타내는 통계 지표입니다.<br><br>
+    • <b>OR &gt; 1</b> (기준선 오른쪽): 해당 기능을 언급한 리뷰일수록 긍정 평가가 많습니다.
+    예) OR=2.0이면, 기능을 언급한 리뷰가 미언급 리뷰보다 긍정일 확률이 2배.<br>
+    • <b>OR &lt; 1</b> (기준선 왼쪽): 해당 기능을 언급한 리뷰일수록 부정 평가가 많습니다.
+    예) OR=0.5이면, 불만 리뷰에서 2배 더 자주 등장하는 기능.<br>
+    • <b>OR = 1</b> (점선 기준선): 긍정·부정 평가와 무관한 기능입니다.<br><br>
+    <b>실선 마커</b>는 통계적으로 유의한 결과(p &lt; 0.05), <b>빈 마커·점선 CI</b>는 비유의(p ≥ 0.05)를 뜻합니다.
+    유의한 결과만을 전략적 의사결정에 활용하세요.
     </div>
     """, unsafe_allow_html=True)
 
@@ -252,6 +268,17 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
 
 
     if combined.empty and not or_results:
+        st.markdown("""
+        <div class="info-box" style="border-left-color:#F59E0B;">
+        ⚠️ <b>오즈비 분석 결과가 아직 없습니다.</b><br><br>
+        가능한 원인:<br>
+        &nbsp;&nbsp;① 왼쪽 사이드바에서 분석할 <b>앱을 1개 이상 선택</b>하지 않았습니다.<br>
+        &nbsp;&nbsp;② 리뷰 데이터가 아직 <b>수집·전처리 중</b>입니다 (잠시 후 새로고침 하세요).<br>
+        &nbsp;&nbsp;③ 선택한 앱의 리뷰에서 기능 키워드가 <b>충분히 등장하지 않아</b> 회귀분석을 수행할 수 없었습니다
+        (최소 2건 이상의 기능 언급 리뷰가 필요합니다).<br><br>
+        앱 선택 후 분석이 완료되면 이 화면이 차트로 전환됩니다.
+        </div>
+        """, unsafe_allow_html=True)
         render_skeleton("오즈비 분석 결과를 불러오는 중입니다", show_chart=True, chart_height=240)
         return
 
@@ -268,6 +295,13 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
             combined = pd.concat([combined, extra], ignore_index=True) if not combined.empty else extra
 
     if combined.empty:
+        st.markdown("""
+        <div class="info-box" style="border-left-color:#F59E0B;">
+        ⚠️ <b>병합 후에도 오즈비 데이터가 없습니다.</b><br>
+        선택한 앱의 리뷰에서 기능 키워드 언급 건수가 너무 적어 통계 계산이 불가능했을 수 있습니다.
+        다른 앱을 추가로 선택하거나, 분석 기간을 늘려 보세요.
+        </div>
+        """, unsafe_allow_html=True)
         render_skeleton("오즈비 분석 결과를 불러오는 중입니다", show_chart=True, chart_height=240)
         return
 
@@ -331,12 +365,18 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
     st.markdown("### 앱별 오즈비 (OR) 비교")
     st.caption(
         f"각 앱의 기능별 OR을 독립적으로 표시합니다. "
-        f"아래 '공통 기능 비교' 차트에서 {len(app_names)}개 앱을 함께 비교할 수 있습니다."
+        f"점(마커) 위치가 점선(OR=1) 기준선보다 오른쪽이면 긍정 연관, 왼쪽이면 부정 연관입니다. "
+        f"오차막대(에러바)는 95% 신뢰구간(CI)으로, 이 구간이 OR=1을 포함하지 않아야 통계적으로 유의합니다. "
+        f"아래 '공통 기능 비교' 차트에서 {len(app_names)}개 앱을 나란히 비교할 수 있습니다."
     )
     for app_name in app_names:
         app_df = combined[combined["app_name"] == app_name]
         if app_df.empty:
-            st.warning(f"{app_name}: OR 데이터 없음")
+            st.warning(
+                f"**{app_name}**: OR 데이터가 없습니다. "
+                "해당 앱 리뷰에서 기능 키워드 언급 건수가 부족하거나(최소 2건 필요), "
+                "회귀분석이 수렴하지 못했을 수 있습니다."
+            )
             continue
         fig = _or_dot_plot(
             app_df,
@@ -354,7 +394,9 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
             common_df = combined[combined["feature_category"].isin(common_cats)]
             st.caption(
                 f"모든 앱({', '.join(app_names)})에 공통으로 등장하는 "
-                f"{len(common_cats)}개 기능의 OR을 한 차트에서 비교합니다."
+                f"{len(common_cats)}개 기능의 OR을 한 차트에서 비교합니다. "
+                "같은 기능에 대해 앱마다 OR 값이 다르면, 해당 기능의 긍정/부정 연관성이 앱별로 다르다는 뜻입니다. "
+                "마커가 겹치거나 CI가 넓을수록 표본 수가 부족하여 불확실성이 높습니다."
             )
             fig_common = _or_dot_plot(
                 common_df,
@@ -365,7 +407,12 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
             )
             st.plotly_chart(fig_common, use_container_width=True, key="or_plot_common")
         else:
-            st.info("분석 앱 간 공통으로 등장한 기능 카테고리가 없습니다.")
+            st.info(
+                "분석 앱 간 공통으로 등장한 기능 카테고리가 없습니다. "
+                "각 앱이 서로 다른 기능 영역에서 언급되고 있거나, "
+                "앱별 리뷰 수 차이로 인해 일부 앱에서만 특정 기능의 OR이 계산된 경우입니다. "
+                "앱별 개별 차트에서 각각의 결과를 확인하세요."
+            )
 
     # ── Insight ────────────────────────────────────────────────────────────
     sig_all = combined[combined["p_value"] < 0.05] if "p_value" in combined.columns else combined
@@ -375,46 +422,67 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
         sig = sub[sub["p_value"] < 0.05] if "p_value" in sub.columns else sub
         if sig.empty:
             items.append((app_name, app_color(app_name, app_names),
-                          "통계적으로 유의한 기능 없음 (p≥0.05)."))
+                          "통계적으로 유의한 기능이 없습니다 (모든 p-value ≥ 0.05). "
+                          "이는 기능 언급 여부와 평점 간에 우연 이상의 패턴이 발견되지 않았음을 의미합니다. "
+                          "리뷰 수가 더 많아지면 유의한 결과가 나타날 수 있습니다."))
             continue
         top = sig.nlargest(1, "OR").iloc[0]
         bot = sig.nsmallest(1, "OR").iloc[0]
+        top_or_val = top["OR"]
+        bot_or_val = bot["OR"]
+        bot_inv_str = f"미언급 리뷰보다 부정일 확률이 {1/bot_or_val:.1f}배" if 0 < bot_or_val < 1 else "부정 리뷰와 강하게 연관"
         items.append((
             app_name, app_color(app_name, app_names),
-            f"유의 기능 <b>{len(sig)}개</b> | "
-            f"긍정 연관 1위 → <b>{top['feature_category']}</b> (OR={top['OR']:.2f}): "
-            f"언급 시 긍정 평점 {top['OR']:.1f}배. "
-            f"부정 연관 1위 → <b>{bot['feature_category']}</b> (OR={bot['OR']:.2f}): "
-            f"불만 리뷰와 강하게 연관."
+            f"유의 기능 <b>{len(sig)}개</b> (p &lt; 0.05 기준) | "
+            f"긍정 연관 1위 → <b>{top['feature_category']}</b> "
+            f"(OR={top_or_val:.2f}: 이 기능 언급 리뷰가 미언급 리뷰보다 긍정일 확률이 {top_or_val:.1f}배). "
+            f"부정 연관 1위 → <b>{bot['feature_category']}</b> "
+            f"(OR={bot_or_val:.2f}: {bot_inv_str}). "
+            f"OR&gt;1 기능은 마케팅 강점으로 활용하고, OR&lt;1 기능은 UX 개선 우선순위로 삼으세요."
         ))
 
     render_insight_box(
-        "기능 카테고리별 오즈비 (OR) 비교 Insight",
-        "각 기능이 긍정/부정 리뷰와 얼마나 연관되는지 통계적으로 측정합니다.",
-        f"전체 {len(combined)}개 기능-앱 조합 중 {len(sig_all)}개가 유의(p<0.05). "
-        "OR>1 기능을 강화하고, OR<1 기능을 개선하세요.",
+        "기능 카테고리별 오즈비 (OR) 비교 핵심 인사이트",
+        "각 기능이 긍정/부정 리뷰와 통계적으로 얼마나 연관되는지를 오즈비(OR)로 측정합니다. "
+        "OR=1 기준선을 중심으로, 오른쪽 기능은 '긍정 경험을 이끄는 강점', "
+        "왼쪽 기능은 '사용자 불만의 원인'으로 해석할 수 있습니다.",
+        f"전체 {len(combined)}개 기능-앱 조합 중 통계적으로 유의한 결과(p &lt; 0.05)는 {len(sig_all)}개입니다. "
+        "OR&gt;1인 유의 기능을 마케팅·UX 강점으로 강화하고, OR&lt;1인 유의 기능을 우선 개선 대상으로 삼으세요. "
+        "비유의(n.s.) 결과는 현재 데이터로는 방향성 판단이 어려우므로, 리뷰 수 확보 후 재분석을 권장합니다.",
         items,
     )
 
     # ── OR 상세 테이블 (앱별) ──────────────────────────────────────────────
     st.markdown("### 오즈비 상세 테이블")
+    st.caption(
+        "각 기능 카테고리의 OR 수치, 95% 신뢰구간(CI 하한~상한), p-value, 리뷰 수, 분석 방법을 확인합니다. "
+        "OR이 높을수록 긍정 연관성이 강하며, p-value < 0.05이면 통계적으로 신뢰할 수 있는 결과입니다. "
+        "95% CI가 좁을수록 추정치가 정밀하고, 넓을수록 불확실성이 큽니다(보통 리뷰 수 부족이 원인)."
+    )
     tabs = st.tabs(app_names)
     for tab, app_name in zip(tabs, app_names):
         with tab:
             app_df = combined[combined["app_name"] == app_name]
             if app_df.empty:
-                st.warning(f"{app_name}: 데이터 없음")
+                st.warning(
+                    f"**{app_name}**: 표시할 OR 데이터가 없습니다. "
+                    "이 앱의 리뷰에서 기능 키워드가 충분히 등장하지 않았거나, "
+                    "분석 과정에서 오류가 발생했을 수 있습니다."
+                )
             else:
                 _app_or_table(app_df, app_name)
 
     # ── ΔOR ───────────────────────────────────────────────────────────────
     if "delta_or" in combined.columns and combined["delta_or"].notna().any():
-        st.markdown("#### ΔOR 해석")
+        st.markdown("#### ΔOR (오즈비 차이) 비교")
         st.markdown("""
         <div class="info-box">
-        <b>ΔOR = 비교 앱 OR − 기준 앱 OR</b><br>
-        • ΔOR <b>음수</b>: 기준 앱 대비 해당 기능의 긍정 연관성이 낮습니다.<br>
-        • ΔOR <b>양수</b>: 기준 앱 대비 우위에 있습니다.
+        <b>ΔOR = 비교 앱 OR − 기준 앱 OR</b> — 기준 앱 대비 각 앱의 기능별 긍정 연관성 차이를 수치화합니다.<br><br>
+        • ΔOR <b>양수(+)</b>: 비교 앱이 해당 기능에서 기준 앱보다 긍정 연관성이 높습니다.
+        예) ΔOR=+0.8이면, 비교 앱에서 해당 기능 언급 리뷰가 긍정일 확률이 기준 앱보다 0.8 오즈 더 높습니다.<br>
+        • ΔOR <b>음수(-)</b>: 비교 앱이 해당 기능에서 기준 앱보다 긍정 연관성이 낮습니다 (경쟁 열위).
+        절대값이 클수록 차이가 크고, 개선 시 기준 앱에 빠르게 따라잡을 수 있는 영역입니다.<br>
+        • 셀 색상: <span style="color:#4CAF50">초록(양수, 우위)</span> / <span style="color:#F44336">빨강(음수, 열위)</span>으로 표현됩니다.
         </div>
         """, unsafe_allow_html=True)
 
@@ -439,17 +507,25 @@ def render(combined: pd.DataFrame, or_results: dict[str, pd.DataFrame]) -> None:
                     continue
                 best  = sub.loc[sub["delta_or"].idxmax()]
                 worst = sub.loc[sub["delta_or"].idxmin()]
+                best_delta  = best["delta_or"]
+                worst_delta = worst["delta_or"]
                 items.append((
                     app_name, app_color(app_name, app_names),
-                    f"vs {base_app} — "
-                    f"최대 우위: <b>{best['feature_category']}</b> (ΔOR=+{best['delta_or']:.2f}), "
-                    f"최대 열위: <b>{worst['feature_category']}</b> (ΔOR={worst['delta_or']:.2f}). "
-                    f"열위 기능은 우선 개선이 필요합니다."
+                    f"vs <b>{base_app}</b> — "
+                    f"최대 우위 기능: <b>{best['feature_category']}</b> "
+                    f"(ΔOR=+{best_delta:.2f}: 이 기능에서 {base_app}보다 긍정 연관성이 {best_delta:.2f} 오즈 더 높음). "
+                    f"최대 열위 기능: <b>{worst['feature_category']}</b> "
+                    f"(ΔOR={worst_delta:.2f}: 이 기능에서 {base_app}보다 긍정 연관성이 {abs(worst_delta):.2f} 오즈 낮음 → 개선 우선 검토). "
+                    f"ΔOR 절대값이 클수록 격차가 크므로 전략적 우선순위가 높습니다."
                 ))
             render_insight_box(
-                "ΔOR 분석",
-                f"기준 앱({base_app}) 대비 각 앱의 기능별 경쟁력 차이를 수치화합니다.",
-                "음수 ΔOR이 개선 과제, 양수가 강점. 절대값이 클수록 시급한 영역이에요.",
+                "ΔOR 경쟁 비교 핵심 인사이트",
+                f"기준 앱({base_app}) 대비 각 앱의 기능별 경쟁력 차이를 ΔOR로 수치화합니다. "
+                "ΔOR이 양수면 해당 기능에서 기준 앱보다 긍정 연관성이 높고(경쟁 우위), "
+                "음수면 낮습니다(경쟁 열위). 절대값이 클수록 두 앱 간 차이가 뚜렷합니다.",
+                "음수(빨강) ΔOR이 클수록 개선 시 만족도 향상 효과가 큽니다. "
+                "양수(초록) ΔOR이 큰 기능은 차별화 포인트로 마케팅에 활용하세요. "
+                "ΔOR이 0에 가까운 기능은 두 앱이 비슷한 수준이므로 상대적으로 덜 시급합니다.",
                 items,
             )
 

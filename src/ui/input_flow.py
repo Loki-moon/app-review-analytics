@@ -64,7 +64,7 @@ def render_controls_bar() -> None:
         st.session_state["date_start"] = _ps
         st.session_state["date_end"]   = _pe
 
-    start_date: date = st.session_state.get("start_date", today - timedelta(days=30))
+    start_date: date = st.session_state.get("start_date", today - timedelta(days=365))
     end_date: date   = st.session_state.get("end_date", today)
 
     # 위젯 키 미초기화 시 기본값 설정 (value= 파라미터 없이 key= 만 사용하기 위함)
@@ -92,8 +92,8 @@ def render_controls_bar() -> None:
     text-align:center;
     ">
 
-    본 대시보드는 학술 연구를 위해 개발중인 대시보드입니다.
-    연구 결과와 논문이 공식적으로 공개되기 전까지 임의 배포를 금지합니다.
+    본 대시보드는 모바일이 아닌 PC 웹 환경에 최적화되어 있습니다. <br> 
+    또한 학술 연구를 위해 개발 중이며, 연구 결과와 논문이 공식적으로 공개되기 전까지 무단 배포를 금지합니다.
 
     <div style="
     width:70%;
@@ -106,8 +106,8 @@ def render_controls_bar() -> None:
     font-size:0.82rem;
     font-style:italic;
     ">
-    This dashboard was developed for academic research purposes.
-    Unauthorized distribution is prohibited until the paper is officially published.
+    This dashboard is optimized for desktop web use and is not intended for mobile environments. <br>
+    It is being developed for academic research purposes, and unauthorized distribution is prohibited until the research findings and paper are officially published.
     </span>
 
     <div style="

@@ -125,8 +125,14 @@ def _render_export(
     st.markdown("### 📥 리뷰 데이터 다운로드")
     st.markdown("""
     <div class="info-box">
-    다운로드된 파일은 Excel 또는 Google Sheets에서 바로 열 수 있어요.<br>
-    한글이 깨지는 경우 파일을 열 때 UTF-8 인코딩을 선택해주세요.
+    <b>수집된 리뷰 데이터를 CSV 파일로 다운로드합니다.</b><br>
+    · <b>앱별 개별 다운로드</b> — 특정 앱의 리뷰만 추출할 때 사용<br>
+    · <b>전체 통합 다운로드</b> — 모든 앱의 리뷰를 하나의 파일로 내보내기<br>
+    · <b>현재 필터 적용 다운로드</b> — 지금 화면에 표시된 조건(검색어·평점·버전 등)이 적용된 데이터만 추출<br><br>
+    <span style="font-size:0.82rem;color:#94A3B8;">
+    ※ 다운로드 파일은 Excel 또는 Google Sheets에서 바로 열 수 있어요.
+       한글이 깨지는 경우 파일을 열 때 <b>UTF-8 인코딩</b>을 선택해주세요.
+    </span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -194,13 +200,26 @@ def render(
 ) -> None:
     st.markdown("""
     <div class="info-box">
-    수집된 원본 리뷰를 탐색합니다. 검색어나 필터로 원하는 리뷰를 빠르게 확인하세요.<br>
-    리뷰 내용을 기반으로 서비스 제품 PO/PM이 개선해야하는 항목을 안내합니다.
+    <b>📋 리뷰 상세 분석</b><br>
+    수집된 원본 리뷰를 직접 탐색할 수 있는 탭입니다.<br><br>
+    <b>활용 방법:</b><br>
+    · <b>🔍 검색</b> — 특정 키워드(예: "결제", "로그인")가 포함된 리뷰만 빠르게 필터링<br>
+    · <b>⭐ 평점 필터</b> — 1~2점 리뷰만 보면 주요 불만 패턴을 파악할 수 있고, 4~5점 리뷰는 강점 발굴에 활용<br>
+    · <b>🏷️ PO/PM 대응 필터</b> — AI가 리뷰 내용을 분석해 "버그수정", "결제점검" 등 업무 대응 카테고리를 자동 분류<br>
+    · <b>📦 버전 필터</b> — 특정 앱 버전 출시 이후의 리뷰 변화를 추적 가능<br><br>
+    <span style="font-size:0.82rem;color:#94A3B8;">
+    ※ PO/PM 대응 필요사항은 리뷰 키워드 기반 자동 분류입니다. 참고용으로 활용하고 실제 판단은 담당자가 수행하세요.
+    </span>
     </div>
     """, unsafe_allow_html=True)
 
     if df.empty:
-        st.warning("표시할 리뷰 데이터가 없습니다.")
+        st.markdown("""
+        <div class="info-box" style="border-left:4px solid #F59E0B;">
+        ⚠️ <b>표시할 리뷰 데이터가 없습니다.</b><br>
+        분석 설정 페이지에서 앱을 검색하고 분석 기간을 설정한 후 '앱 리뷰 분석 시작하기'를 눌러주세요.
+        </div>
+        """, unsafe_allow_html=True)
         return
 
     # ── PO/PM 태그 필터 옵션 (정적) ───────────────────────────────────────────
@@ -277,7 +296,29 @@ def render(
     if "review_date" in filtered.columns:
         filtered = filtered.sort_values("review_date", ascending=False)
 
-    st.markdown(f"**총 {len(filtered):,}개** 리뷰")
+    # 필터 결과 요약
+    total_cnt = len(filtered)
+    pos_cnt = (filtered["score"] >= 4).sum() if "score" in filtered.columns else 0
+    neg_cnt = (filtered["score"] <= 2).sum() if "score" in filtered.columns else 0
+    mid_cnt = total_cnt - pos_cnt - neg_cnt
+
+    st.markdown(
+        f'<div style="display:flex;gap:1.5rem;align-items:center;margin:0.5rem 0 0.8rem;">'
+        f'<span style="font-size:1rem;font-weight:700;color:#E2E8F0;">총 {total_cnt:,}개 리뷰</span>'
+        f'<span style="font-size:0.82rem;color:#10B981;">긍정(4~5점) {pos_cnt:,}건</span>'
+        f'<span style="font-size:0.82rem;color:#F59E0B;">보통(3점) {mid_cnt:,}건</span>'
+        f'<span style="font-size:0.82rem;color:#EF4444;">부정(1~2점) {neg_cnt:,}건</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if total_cnt == 0:
+        st.markdown("""
+        <div class="info-box" style="border-left:4px solid #F59E0B;">
+        ⚠️ <b>현재 필터 조건에 맞는 리뷰가 없습니다.</b><br>
+        검색어를 바꾸거나 필터 조건을 완화해보세요.
+        </div>
+        """, unsafe_allow_html=True)
+        return
 
     # ── 더보기 pagination ─────────────────────────────────────────────────────
     page_key = "review_page"
