@@ -2,13 +2,15 @@
 통계 검증 모듈 (PRD 28번)
 
 검증 항목:
-1. 모형 적합도 (Model Fit)      - Pseudo R², AIC, BIC, Log-Likelihood
-2. 회귀계수 유의성               - β, OR, CI, p-value per keyword
-3. 상호작용 효과 검정             - Wald / LR test (keyword × service 더미)
-4. 다중공선성                    - 상관계수 행렬, VIF
-5. 평점 이분화 기준 민감도        - 3가지 임계 조건 비교
-6. 기간 분할 안정성              - 전체 / 상반기 / 하반기 OR 비교
-7. 표본 분포                    - 앱별 건수, 평점분포, 월별 추이
+1. 모형 적합도 (Model Fit)          - Pseudo R², AIC, BIC, Log-Likelihood
+2. 회귀계수 유의성                   - β, OR, CI, p-value per keyword
+3. 상호작용 효과 검정                 - Wald / LR test (keyword × service 더미)
+4. 기능 키워드 공출현 패턴            - 스피어만(Spearman) 순위 상관계수 행렬
+   * 기능 k별 개별 회귀 설계이므로 다중공선성은 구조적으로 발생하지 않음.
+     대신 기능 키워드 간 공출현 패턴을 비모수 상관계수로 보고한다.
+5. 평점 이분화 기준 민감도            - 3가지 임계 조건 비교
+6. 기간 분할 안정성                  - 전체 / 상반기 / 하반기 OR 비교
+7. 표본 분포                        - 앱별 건수, 평점분포, 월별 추이
 """
 from __future__ import annotations
 
@@ -18,7 +20,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
-from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 from config.settings import NEGATIVE_THRESHOLD, POSITIVE_THRESHOLD
 from src.analysis.model import build_regression_df, run_logistic_regression
@@ -57,7 +58,7 @@ def _badge(status: str) -> str:
 def compute_model_fit(df: pd.DataFrame, feature_cols: list[str]) -> dict[str, Any]:
     """앱별 로지스틱 회귀 전체 모형 적합도 지표 반환"""
     rows = []
-    control_vars = [c for c in ["review_length", "update_flag"] if c in df.columns]
+    control_vars = [c for c in ["review_length", "review_month", "update_flag"] if c in df.columns]
 
     for app_name, group in df.groupby("app_name"):
         reg_df = build_regression_df(group)
@@ -127,104 +128,117 @@ def compute_coef_significance(combined_or: pd.DataFrame) -> pd.DataFrame:
 
 def compute_interaction_test(df: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
     """
-    기능 키워드 × 앱 더미 상호작용항 Wald / LR test 수행.
-    앱이 2개 이상인 경우에만 의미 있음.
+    기능 키워드 × 앱 더미 상호작용항 Wald / LR test 수행 — 쌍별(pairwise) 검정.
+
+    3개 이상 앱이 있을 때 단일 이진 더미(0/1)를 쓰면 모든 비기준 앱이 같은 집단으로
+    묶여 통계적으로 잘못된 결과가 나온다. 따라서 앱 쌍(pair)별로 독립 검정을 실행하고
+    결과를 합산한다. (A-B, A-C, B-C 각각 2앱 비교)
     """
+    from scipy.stats import chi2
+
     app_names = df["app_name"].unique().tolist()
     if len(app_names) < 2:
         return pd.DataFrame()
 
-    # 앱 더미 (기준=첫 번째 앱)
-    base_app = app_names[0]
-    df = df.copy()
-    df["app_dummy"] = (df["app_name"] != base_app).astype(int)
+    # 모든 앱 쌍 생성
+    from itertools import combinations
+    pairs = list(combinations(app_names, 2))
 
-    reg_df = build_regression_df(df)
-    if len(reg_df) < 50:
+    all_rows = []
+
+    for app_a, app_b in pairs:
+        pair_df = df[df["app_name"].isin([app_a, app_b])].copy()
+        reg_df = build_regression_df(pair_df)
+        if len(reg_df) < 50:
+            continue
+
+        reg_df["app_dummy"] = (reg_df["app_name"] == app_b).astype(int)
+        control_vars = [c for c in ["review_length", "review_month", "update_flag"]
+                        if c in reg_df.columns]
+
+        for col in feature_cols:
+            cat = col.replace("keyword_", "")
+            if reg_df[col].sum() < 5:
+                continue
+
+            interaction_term = f"interaction_{cat}"
+            reg_df[interaction_term] = reg_df[col] * reg_df["app_dummy"]
+
+            # 분산 없는 통제변수 제거
+            active_ctrl = [v for v in control_vars if reg_df[v].nunique() > 1]
+            ctrl_str = (" + " + " + ".join(active_ctrl)) if active_ctrl else ""
+            formula_full    = f"sentiment_binary ~ {col} + app_dummy + {interaction_term}{ctrl_str}"
+            formula_reduced = f"sentiment_binary ~ {col} + app_dummy{ctrl_str}"
+
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    m_full    = smf.logit(formula_full,    data=reg_df).fit(disp=False, maxiter=200)
+                    m_reduced = smf.logit(formula_reduced, data=reg_df).fit(disp=False, maxiter=200)
+
+                lr_stat  = 2 * (m_full.llf - m_reduced.llf)
+                lr_pval  = chi2.sf(lr_stat, df=1)
+                wald_pval = m_full.pvalues.get(interaction_term, float("nan"))
+
+                all_rows.append({
+                    "feature_category": cat,
+                    "pair": f"{app_a} vs {app_b}",
+                    "app_a": app_a,
+                    "app_b": app_b,
+                    "wald_pvalue": round(wald_pval, 4),
+                    "lr_pvalue": round(lr_pval, 4),
+                    "wald_sig": _significance_label(wald_pval),
+                    "lr_sig": _significance_label(lr_pval),
+                    "status": "pass" if lr_pval < 0.05 else "warn" if lr_pval < 0.1 else "fail",
+                })
+            except Exception:
+                continue
+
+    if not all_rows:
         return pd.DataFrame()
 
-    control_vars = [c for c in ["review_length", "update_flag"] if c in reg_df.columns]
-    rows = []
+    result = pd.DataFrame(all_rows)
 
-    for col in feature_cols:
-        cat = col.replace("keyword_", "")
-        if reg_df[col].sum() < 5:
-            continue
-
-        interaction_term = f"interaction_{cat}"
-        reg_df[interaction_term] = reg_df[col] * reg_df["app_dummy"]
-
-        ctrl_str = (" + " + " + ".join(control_vars)) if control_vars else ""
-        formula_full    = f"sentiment_binary ~ {col} + app_dummy + {interaction_term}{ctrl_str}"
-        formula_reduced = f"sentiment_binary ~ {col} + app_dummy{ctrl_str}"
-
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                m_full    = smf.logit(formula_full,    data=reg_df).fit(disp=False, maxiter=200)
-                m_reduced = smf.logit(formula_reduced, data=reg_df).fit(disp=False, maxiter=200)
-
-            # LR test statistic
-            lr_stat = 2 * (m_full.llf - m_reduced.llf)
-            from scipy.stats import chi2
-            lr_pval = chi2.sf(lr_stat, df=1)
-
-            # Wald p-value
-            wald_pval = m_full.pvalues.get(interaction_term, float("nan"))
-
-            rows.append({
-                "feature_category": cat,
-                "wald_pvalue": round(wald_pval, 4),
-                "lr_pvalue": round(lr_pval, 4),
-                "wald_sig": _significance_label(wald_pval),
-                "lr_sig": _significance_label(lr_pval),
-                "status": "pass" if lr_pval < 0.05 else "warn" if lr_pval < 0.1 else "fail",
-            })
-        except Exception:
-            continue
-
-    return pd.DataFrame(rows)
+    # 요약: 기능별 최소 lr_pvalue (가장 유의한 쌍 기준)
+    summary = (
+        result.groupby("feature_category")
+        .apply(lambda g: g.loc[g["lr_pvalue"].idxmin()])
+        .reset_index(drop=True)
+    )
+    # 전체 쌍 결과도 함께 반환 (UI에서 활용)
+    result.attrs["pairs_detail"] = result.copy()
+    return summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. 다중공선성
+# 4. 기능 키워드 공출현 패턴 (스피어만 상관계수)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def compute_multicollinearity(df: pd.DataFrame, feature_cols: list[str]) -> dict[str, Any]:
-    """상관계수 행렬 + VIF 테이블"""
+    """
+    기능 키워드 간 공출현 패턴 — 스피어만(Spearman) 순위 상관계수 행렬.
+
+    설계 원칙:
+      본 분석은 기능 k별 개별 로지스틱 회귀를 채택하였으므로, 동일 모형 내
+      복수 예측변수가 공존하지 않아 다중공선성(VIF)은 구조적으로 발생하지 않는다.
+      대신 이진 더미 변수에 적합한 스피어만 상관계수로 키워드 간 공출현 패턴을
+      보조 지표로 보고한다. |r| ≥ 0.7인 쌍은 해석 시 주의를 요한다.
+    """
     sub = df[feature_cols].copy().dropna()
     if sub.empty or len(sub.columns) < 2:
-        return {"corr_matrix": pd.DataFrame(), "vif_table": pd.DataFrame()}
+        return {"corr_matrix": pd.DataFrame()}
 
     # 분산이 0인 컬럼 제거
     sub = sub.loc[:, sub.std() > 0]
     if sub.shape[1] < 2:
-        return {"corr_matrix": pd.DataFrame(), "vif_table": pd.DataFrame()}
+        return {"corr_matrix": pd.DataFrame()}
 
-    corr_matrix = sub.corr().round(3)
+    # 스피어만 상관계수 (이진 변수에 적합한 비모수 방법)
+    corr_matrix = sub.corr(method="spearman").round(3)
     corr_matrix.index   = [c.replace("keyword_", "") for c in corr_matrix.index]
     corr_matrix.columns = [c.replace("keyword_", "") for c in corr_matrix.columns]
 
-    # VIF
-    vif_rows = []
-    X = sub.copy()
-    X.insert(0, "const", 1.0)
-    feat_list = list(sub.columns)
-    for i, col in enumerate(feat_list):
-        try:
-            vif_val = variance_inflation_factor(X.values, i + 1)
-        except Exception:
-            vif_val = float("nan")
-        vif_rows.append({
-            "feature_category": col.replace("keyword_", ""),
-            "vif": round(vif_val, 3),
-            "status": "pass" if vif_val < 5 else ("warn" if vif_val < 10 else "fail"),
-        })
-
-    return {
-        "corr_matrix": corr_matrix,
-        "vif_table": pd.DataFrame(vif_rows),
-    }
+    return {"corr_matrix": corr_matrix}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -436,11 +450,11 @@ def run_all_validations(
     except Exception as e:
         result["interaction"] = pd.DataFrame()
 
-    # 4. 다중공선성
+    # 4. 기능 키워드 공출현 패턴 (스피어만 상관계수)
     try:
         result["multicol"] = compute_multicollinearity(processed_df, feature_cols)
     except Exception as e:
-        result["multicol"] = {"corr_matrix": pd.DataFrame(), "vif_table": pd.DataFrame()}
+        result["multicol"] = {"corr_matrix": pd.DataFrame()}
 
     # 5. 민감도 분석 (임계값) — processed_df 사용 (feature binary 컬럼 필요)
     try:

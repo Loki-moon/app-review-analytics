@@ -5,6 +5,15 @@ Tab 5: Statistical Validation (PRD 28·29번)
 - 상단 전체 검증 요약 카드
 - 7개 검증 항목 (아코디언)
   각 항목: 목적 설명 → 시각화 → 수치 테이블 → 배지 → 해석 문구 → 논문 기술 예시
+
+검증 항목:
+  1. 모형 적합도          - Pseudo R², AIC, BIC
+  2. 회귀계수 유의성       - β, OR, CI, p-value (기능별 개별 회귀)
+  3. 서비스 간 영향력 차이  - 상호작용항 Wald / LR test
+  4. 기능 키워드 공출현 패턴 - 스피어만 상관계수 (개별 회귀 설계 → VIF 미적용)
+  5. 평점 이분화 기준 민감도 - 3점 처리 3가지 조건 비교
+  6. 기간 분할 안정성      - 전체 / 상반기 / 하반기 OR 비교
+  7. 표본 분포            - 앱별 건수, 평점분포, 월별 추이
 """
 from __future__ import annotations
 
@@ -183,12 +192,15 @@ def _render_summary(vr: dict[str, Any]) -> None:
         items.append(("상호작용 검정", "warn"))
 
     mc = vr.get("multicol", {})
-    vif_table = mc.get("vif_table", pd.DataFrame()) if isinstance(mc, dict) else pd.DataFrame()
-    if not vif_table.empty and "status" in vif_table.columns:
-        worst = "fail" if "fail" in vif_table["status"].values else ("warn" if "warn" in vif_table["status"].values else "pass")
-        items.append(("다중공선성", worst))
+    corr_m = mc.get("corr_matrix", pd.DataFrame()) if isinstance(mc, dict) else pd.DataFrame()
+    if not corr_m.empty:
+        # 대각선 제외 절대값이 0.7 이상인 쌍이 있으면 warn
+        mask = np.ones(corr_m.shape, dtype=bool)
+        np.fill_diagonal(mask, False)
+        high_corr = (corr_m.where(mask).abs() >= 0.7).any().any()
+        items.append(("공출현 패턴", "warn" if high_corr else "pass"))
     else:
-        items.append(("다중공선성", "pass"))
+        items.append(("공출현 패턴", "pass"))
 
     items.append(("평점 민감도", "pass"))
     items.append(("기간 안정성", "pass"))
@@ -317,21 +329,18 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
                 unsafe_allow_html=True,
             )
 
-    # 토스·카카오페이·네이버페이 3앱 동시 분석 시 설명 문구
-    app_names_in_table = set(table["app_name"].tolist())
-    _TOSS_NAMES = {"토스", "Toss"}
-    _KAKAO_NAMES = {"카카오페이", "KakaoPay"}
-    _NAVER_NAMES = {"네이버페이", "NaverPay"}
-    has_toss  = bool(app_names_in_table & _TOSS_NAMES)
-    has_kakao = bool(app_names_in_table & _KAKAO_NAMES)
-    has_naver = bool(app_names_in_table & _NAVER_NAMES)
-    if has_toss and has_kakao and has_naver:
+    # 3개 이상 앱 동시 분석 시 Pseudo R² 요약 안내
+    if len(table) >= 3:
+        r2_summary = " / ".join(
+            f"<b>{row['app_name']}</b> R²={row['pseudo_r2']:.3f}"
+            for _, row in table.iterrows()
+        )
         st.markdown(
-            '<div class="info-box" style="margin-top:10px;border-left:3px solid #4F8EF7;">'
-            '💡 <b>Pseudo R² 해석 참고:</b><br>'
-            '토스의 낮은 Pseudo R²(0.095)는 슈퍼앱 특성상 이용자 만족이 특정 기능보다 서비스 전반에 분산되어 있음을 시사한다. '
-            '반면 카카오페이(0.183)는 위젯·계좌조회 등 특정 기능의 만족도가 전반적 평점과 강하게 연관되는 집중적 패턴을 보인다.'
-            '</div>',
+            f'<div class="info-box" style="margin-top:10px;border-left:3px solid #4F8EF7;">'
+            f'💡 <b>Pseudo R² 비교:</b> {r2_summary}<br>'
+            f'R²가 낮은 앱은 이용자 만족이 특정 기능보다 서비스 전반에 분산되어 있거나, '
+            f'리뷰에서 기능 언급 빈도가 낮을 수 있습니다.'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -540,7 +549,8 @@ def _render_interaction(vr: dict[str, Any], combined_or: pd.DataFrame) -> None:
     st.markdown("""
     <div class="info-box">
     <b>목적:</b> 같은 기능이라도 앱에 따라 평점에 미치는 영향이 실제로 다른지 확인합니다.<br>
-    유의하다면 ΔOR을 신뢰할 수 있는 비교 지표로 사용할 수 있어요.
+    3개 이상 앱 분석 시 모든 앱 쌍(A-B, A-C, B-C)에 대해 개별 검정을 수행하여
+    쌍별 영향력 차이를 정확하게 파악합니다. 유의한 쌍이 있으면 ΔOR을 신뢰할 수 있는 비교 지표로 사용할 수 있어요.
     </div>
     """, unsafe_allow_html=True)
 
@@ -639,47 +649,65 @@ def _render_interaction(vr: dict[str, Any], combined_or: pd.DataFrame) -> None:
                 f"(ΔOR={worst['delta_or']:.2f}) — 이 기능의 불만이 경쟁사보다 더 높으므로 우선 개선이 필요합니다.",
             )
 
-    # 상호작용 테이블
+    # 상호작용 테이블 (기능별 요약 + 쌍별 상세)
     if isinstance(ia, pd.DataFrame) and not ia.empty:
-        display_cols = {
-            "feature_category": "기능", "wald_pvalue": "Wald p-value",
-            "wald_sig": "Wald 유의성", "lr_pvalue": "LR p-value", "lr_sig": "LR 유의성",
+        summary_cols = {
+            "feature_category": "기능",
+            "pair": "비교 쌍",
+            "wald_pvalue": "Wald p-value",
+            "wald_sig": "Wald 유의성",
+            "lr_pvalue": "LR p-value",
+            "lr_sig": "LR 유의성",
         }
+        st.markdown("**기능별 유의 쌍 요약** (기능별 가장 유의한 쌍 기준)")
         st.dataframe(
-            ia[[c for c in display_cols if c in ia.columns]].rename(columns=display_cols),
+            ia[[c for c in summary_cols if c in ia.columns]].rename(columns=summary_cols),
             use_container_width=True,
         )
+        # 쌍별 전체 상세 결과 (attrs에 저장된 경우)
+        pairs_detail = ia.attrs.get("pairs_detail", pd.DataFrame())
+        if not pairs_detail.empty and "pair" in pairs_detail.columns:
+            with st.expander("전체 쌍별 상세 결과 보기"):
+                st.dataframe(
+                    pairs_detail[[c for c in summary_cols if c in pairs_detail.columns]]
+                    .rename(columns=summary_cols),
+                    use_container_width=True,
+                )
     else:
         st.info("상호작용 검정은 2개 이상의 앱이 분석된 경우에 제공됩니다.")
 
     _thesis_box(
-        "서비스 간 기능 영향력 차이를 검정하기 위해 기능 키워드 × 서비스 더미 상호작용항을 포함한 모형과 "
-        "제외한 모형 간 LR 검정을 수행하였다. 유의한 상호작용이 확인된 기능에 대해 ΔOR을 비교 지표로 활용하였다."
+        "서비스 간 기능 영향력 차이를 검정하기 위해 서비스 쌍(pair)별로 기능 키워드 × 서비스 더미 "
+        "상호작용항을 포함한 모형과 제외한 모형 간 LR 검정을 수행하였다. "
+        "3개 이상 서비스 분석 시 모든 쌍 조합(A-B, A-C, B-C)에 대해 개별 검정을 실시하였으며, "
+        "각 기능에서 가장 유의한 쌍의 결과를 대표값으로 보고하였다. "
+        "유의한 상호작용이 확인된 기능에 대해 ΔOR을 비교 지표로 활용하였다."
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 항목 4: 다중공선성 (히트맵 + VIF)
+# 항목 4: 기능 키워드 공출현 패턴 (스피어만 상관계수 히트맵)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _render_multicollinearity(vr: dict[str, Any]) -> None:
     mc = vr.get("multicol", {})
     if not isinstance(mc, dict):
-        render_skeleton("다중공선성 분석중입니다", show_chart=True, chart_height=180)
+        render_skeleton("공출현 패턴 분석중입니다", show_chart=True, chart_height=180)
         return
 
     corr_matrix = mc.get("corr_matrix", pd.DataFrame())
-    vif_table   = mc.get("vif_table", pd.DataFrame())
 
     st.markdown("""
     <div class="info-box">
-    <b>목적:</b> 기능 키워드들이 서로 독립적으로 작동하는지 확인합니다.<br>
-    VIF 수치가 낮을수록 각 키워드가 독립적으로 작동하고 있다는 의미예요.
+    <b>목적:</b> 기능 키워드들이 같은 리뷰에서 함께 등장하는 패턴을 확인합니다.<br>
+    본 분석은 기능별 개별 회귀 설계를 채택하였으므로 동일 모형 내 다중공선성은
+    구조적으로 발생하지 않습니다. 스피어만 상관계수는 공출현 경향의 참고 지표입니다.<br>
+    |r| ≥ 0.7인 쌍(빨간 테두리)은 같은 리뷰에서 자주 함께 등장하므로 해석 시 주의하세요.
     </div>
     """, unsafe_allow_html=True)
 
-    # ── 상관계수 히트맵 (전체 너비) ───────────────────────────────────────────
-    st.markdown("**상관계수 히트맵** (0.7 이상은 주의)")
+    # ── 스피어만 상관계수 히트맵 ─────────────────────────────────────────────
+    st.markdown("**스피어만 상관계수 히트맵** (|r| ≥ 0.7 은 주의)")
     if not corr_matrix.empty:
         n_feats = len(corr_matrix)
         fig_h = max(6, n_feats * 0.35)
@@ -699,7 +727,7 @@ def _render_multicollinearity(vr: dict[str, Any]) -> None:
             vmax=1,
             mask=mask,
             linewidths=0.5,
-            annot_kws={"size": 7},   # 색상 미지정 → matplotlib이 배경에 맞게 자동 대비
+            annot_kws={"size": 7},
             linecolor=_GRID,
         )
         ax.tick_params(colors=_TEXT, labelsize=8)
@@ -708,6 +736,7 @@ def _render_multicollinearity(vr: dict[str, Any]) -> None:
         for spine in ax.spines.values():
             spine.set_edgecolor(_LINE)
 
+        # |r| >= 0.7 쌍 강조 (빨간 테두리)
         for i in range(len(corr_matrix)):
             for j in range(i):
                 val = corr_matrix.iloc[i, j]
@@ -715,7 +744,7 @@ def _render_multicollinearity(vr: dict[str, Any]) -> None:
                     ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False,
                                                edgecolor="#FF6B8A", lw=2.5))
 
-        ax.set_title("기능 키워드 간 상관계수", fontsize=12, pad=10, color=_TEXT)
+        ax.set_title("기능 키워드 간 스피어만 상관계수 (공출현 패턴)", fontsize=12, pad=10, color=_TEXT)
         plt.tight_layout()
 
         buf = io.BytesIO()
@@ -728,63 +757,49 @@ def _render_multicollinearity(vr: dict[str, Any]) -> None:
         st.download_button(
             "📥 히트맵 이미지 다운로드",
             data=img_bytes,
-            file_name=f"multicollinearity_heatmap_{datetime.now().strftime('%Y%m%d')}.png",
+            file_name=f"cooccurrence_heatmap_{datetime.now().strftime('%Y%m%d')}.png",
             mime="image/png",
             key="dl_corr_heatmap",
         )
+
+        # 고상관 쌍 탐지 및 배지
+        mask_diag = np.ones(corr_matrix.shape, dtype=bool)
+        np.fill_diagonal(mask_diag, False)
+        high_pairs = []
+        for i in range(len(corr_matrix)):
+            for j in range(i):
+                val = corr_matrix.iloc[i, j]
+                if abs(val) >= 0.7:
+                    high_pairs.append(
+                        f"<b>{corr_matrix.index[i]}</b> ↔ <b>{corr_matrix.columns[j]}</b> (r={val:.2f})"
+                    )
+
+        overall_status = "warn" if high_pairs else "pass"
+        st.markdown(_badge_html(overall_status), unsafe_allow_html=True)
+
+        if high_pairs:
+            _interp_box(
+                "기능 키워드 공출현 패턴",
+                f"|r| ≥ 0.7 주의 쌍 {len(high_pairs)}개: " + " | ".join(high_pairs) +
+                ". 이 기능들은 같은 리뷰에서 자주 함께 언급됩니다. "
+                "개별 회귀 설계이므로 다중공선성 문제는 아니지만, 개별 OR 해석 시 "
+                "공출현 맥락을 함께 고려하세요.",
+            )
+        else:
+            _interp_box(
+                "기능 키워드 공출현 패턴",
+                "모든 기능 키워드 쌍의 스피어만 |r| < 0.7입니다. "
+                "각 키워드가 독립적인 문맥에서 등장하는 경향이 있어 OR 해석이 용이합니다.",
+            )
     else:
-        st.info("상관계수 계산에 필요한 데이터가 부족합니다.")
-
-    st.markdown("---")
-
-    # ── VIF 분산 팽창 지수 (히트맵 아래 전체 너비) ────────────────────────────
-    st.markdown("**VIF (분산 팽창 지수)**")
-    if not vif_table.empty:
-        vif_colors = []
-        for _, row in vif_table.iterrows():
-            v = row.get("vif", 0)
-            vif_colors.append("#EF4444" if v >= 10 else "#F59E0B" if v >= 5 else "#10B981")
-
-        fig_vif = go.Figure(go.Bar(
-            y=vif_table["feature_category"].tolist(),
-            x=vif_table["vif"].tolist(),
-            orientation="h",
-            marker_color=vif_colors,
-            hovertemplate="<b>%{y}</b><br>VIF: %{x:.2f}<br>10 미만이면 양호해요<extra></extra>",
-        ))
-        fig_vif.add_vline(x=5,  line_dash="dot", line_color="#F59E0B",
-                          annotation_text="주의(5)", annotation_position="top right",
-                          annotation_font_color="#F59E0B")
-        fig_vif.add_vline(x=10, line_dash="dot", line_color="#EF4444",
-                          annotation_text="경고(10)", annotation_position="top right",
-                          annotation_font_color="#EF4444")
-        fig_vif.update_layout(
-            title=dict(text="VIF (낮을수록 독립적)", x=0.5, xanchor="center", font=dict(color=_TEXT)),
-            xaxis_title="VIF",
-            height=max(300, len(vif_table) * 28 + 100),
-            **LAYOUT_DEFAULTS,
-        )
-        st.plotly_chart(fig_vif, use_container_width=True)
-        _chart_download_btn(fig_vif, "vif_bar")
-
-        worst = "fail" if "fail" in vif_table["status"].values else ("warn" if "warn" in vif_table["status"].values else "pass")
-        st.markdown(_badge_html(worst), unsafe_allow_html=True)
-
-        # VIF 해석
-        max_vif_row = vif_table.loc[vif_table["vif"].idxmax()]
-        high_vif = vif_table[vif_table["vif"] >= 5]
-        _interp_box(
-            "VIF (분산 팽창 지수)",
-            f"최대 VIF: <b>{max_vif_row['feature_category']}</b> (VIF={max_vif_row['vif']:.2f}). "
-            f"{'주의 수준(VIF≥5) 변수: ' + ', '.join(high_vif['feature_category'].tolist()) + '. ' if not high_vif.empty else '모든 변수가 양호 수준(VIF<5)입니다. '}"
-            f"VIF<10이면 다중공선성이 심각하지 않아 분석 결과를 신뢰할 수 있습니다.",
-        )
-    else:
-        st.info("VIF 계산에 필요한 데이터가 부족합니다.")
+        st.info("공출현 패턴 계산에 필요한 데이터가 부족합니다.")
 
     _thesis_box(
-        "기능 키워드 간 다중공선성을 VIF로 점검하였으며, 모든 변수의 VIF가 10 미만으로 "
-        "다중공선성이 심각한 수준이 아님을 확인하였다."
+        "본 연구는 기능 카테고리별 개별 로지스틱 회귀를 채택하였으므로, 동일 모형 내 "
+        "복수 기능 예측변수가 공존하지 않아 다중공선성은 구조적으로 발생하지 않는다. "
+        "이에 VIF 산출은 적용하지 않으며, 기능 키워드 간 공출현 패턴을 파악하기 위해 "
+        "이진 더미 변수에 적합한 스피어만(Spearman) 순위 상관계수 행렬을 보조 지표로 보고하였다. "
+        "|r| ≥ 0.7인 쌍은 해석 시 공출현 맥락을 함께 고려하였다."
     )
 
 
@@ -1239,7 +1254,7 @@ def render(
     with st.expander("3️⃣ 서비스 간 영향력 차이 검정 (Interaction Effect Test)", expanded=True):
         _render_interaction(vr, combined_or)
 
-    with st.expander("4️⃣ 다중공선성 (Multicollinearity)", expanded=True):
+    with st.expander("4️⃣ 기능 키워드 공출현 패턴 (Feature Co-occurrence)", expanded=True):
         _render_multicollinearity(vr)
 
     with st.expander("5️⃣ 평점 이분화 기준 민감도 (Threshold Sensitivity)", expanded=True):

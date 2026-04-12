@@ -2,13 +2,18 @@
 로지스틱 회귀 분석 모듈
 
 - 종속변수: sentiment_binary (4,5점=1 / 1,2점=0 / 3점 제외)
-- 독립변수: 기능 키워드 더미
-- 통제변수: review_length, 작성 월 더미, update_flag
+- 독립변수: 기능 키워드 더미 (기능 k별 개별 모형 추정)
+- 통제변수: review_length, review_month(1~12 연속형), update_flag
 - 반환: 기능 카테고리별 OR, 95% CI, p-value
 
 분석 방법 선택:
 - 기능 언급 리뷰 >= 10건 → 로지스틱 회귀 (통제변수 포함)
 - 기능 언급 리뷰 2~9건  → 피셔 정확검정 (소표본 대응, Haldane 보정)
+
+설계 원칙:
+- 각 기능 키워드 k(k=1,...,K)에 대해 독립적으로 회귀 모형을 추정한다.
+- 이 설계에서는 동일 모형 내 복수 기능이 공존하지 않으므로 다중공선성이
+  구조적으로 발생하지 않는다.
 """
 from __future__ import annotations
 
@@ -135,8 +140,9 @@ def run_logistic_regression(
     results = []
 
     # 통제변수 컬럼 (있는 것만)
+    # review_month: 계절성·외생 사건 통제용 연속형 월 변수(1~12)
     control_vars = []
-    for col in ["review_length", "update_flag"]:
+    for col in ["review_length", "review_month", "update_flag"]:
         if col in df.columns:
             control_vars.append(col)
 
