@@ -27,6 +27,7 @@ from src.visualization._common import (
     apply_dark_theme, centered_title,
     render_insight_box,
 )
+from src.visualization.tab_thesis_insights import render_single_insights
 
 
 _BUNDLED_FONT = ASSETS_DIR / "fonts" / "NanumGothic.ttf"
@@ -171,6 +172,7 @@ def render(
     processed_df: pd.DataFrame,
     or_results: dict[str, pd.DataFrame],
     combined_or: pd.DataFrame,
+    vr: dict | None = None,
 ) -> None:
     if raw_df.empty:
         st.warning(
@@ -465,3 +467,6 @@ def render(
             ⚠️ 연관어 데이터가 없습니다. 토큰 전처리가 완료된 데이터가 충분히 존재하는지 확인해주세요.
             </div>
             """, unsafe_allow_html=True)
+
+    # ── 논문 Ch.4–5 기반 연구 결과 종합 시사점 ──────────────────────────────
+    render_single_insights(combined_or, app_name=app_name, vr=vr or {})

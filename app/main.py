@@ -687,9 +687,9 @@ def _page_result():
 
     with view_tab:
         if is_compare:
-            compare_view.render(raw_df, processed_df, or_results, combined_or)
+            compare_view.render(raw_df, processed_df, or_results, combined_or, vr=vr)
         else:
-            single_view.render(raw_df, processed_df, or_results, combined_or)
+            single_view.render(raw_df, processed_df, or_results, combined_or, vr=vr)
 
     with review_tab:
         tab_review.render(raw_df, start_date=start_date, end_date=end_date)

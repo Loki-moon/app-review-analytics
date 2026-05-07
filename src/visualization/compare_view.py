@@ -8,6 +8,7 @@
 4. 기능별 OR 비교 차트 + 상세 테이블 + Insight
 5. ΔOR 경쟁 우위/열위 차트 + 상세 테이블 + Insight (데이터 부족 안내)
 6. 기능 개선 우선순위 매트릭스 + 상세 테이블 + 종합 Insight (데이터 부족 안내)
+7. 논문 Ch.4–5 기반 연구 결과 종합 시사점 (McFadden R², 전략 액션 플랜, 서비스 기획자 시사점)
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ from src.visualization._common import (
     get_ordered_app_names, app_color, render_insight_box,
     app_icon_html,
 )
+from src.visualization.tab_thesis_insights import render_compare_insights
 
 _BUNDLED_FONT = ASSETS_DIR / "fonts" / "NanumGothic.ttf"
 
@@ -1316,6 +1318,7 @@ def render(
     processed_df: pd.DataFrame,
     or_results: dict[str, pd.DataFrame],
     combined_or: pd.DataFrame,
+    vr: dict | None = None,
 ) -> None:
     if raw_df.empty:
         st.warning("비교 분석 데이터가 없습니다.")
@@ -1348,7 +1351,8 @@ def render(
     &bull; <b>섹션 3 (워드클라우드)</b>: 긍정/부정 키워드 비교 — 각 앱의 강점·약점 주제 파악<br>
     &bull; <b>섹션 4 (OR 비교)</b>: 기능별 오즈비 — 어느 앱이 어떤 기능에서 사용자 만족도가 높은가<br>
     &bull; <b>섹션 5 (ΔOR)</b>: 기준 앱 대비 경쟁 우위/열위 기능 — 어디를 먼저 개선해야 하는가<br>
-    &bull; <b>섹션 6 (우선순위 매트릭스)</b>: 4분면 전략 포지션 — 개선 효과 최대화 우선순위 결정
+    &bull; <b>섹션 6 (우선순위 매트릭스)</b>: 4분면 전략 포지션 — 개선 효과 최대화 우선순위 결정<br>
+    &bull; <b>섹션 7 (연구 시사점)</b>: 논문 Ch.4–5 기반 — 모형 신뢰도·전략 액션 플랜·서비스 기획자 시사점
     </div>
     """, unsafe_allow_html=True)
     _render_distribution_section(raw_df, app_names)
@@ -1378,6 +1382,15 @@ def render(
     st.divider()
     st.markdown("#### 기능 개선 우선순위 매트릭스")
     _render_priority_section(combined_or, app_names, raw_df)
+
+    # ── 섹션 7: 논문 Ch.4–5 기반 연구 결과 종합 시사점 ──────────────────────
+    st.divider()
+    render_compare_insights(
+        combined_or=combined_or,
+        app_names=app_names,
+        vr=vr or {},
+        base_app=app_names[0] if app_names else None,
+    )
 
     # ── 결과 다운로드 ────────────────────────────────────────────────────────
     st.divider()

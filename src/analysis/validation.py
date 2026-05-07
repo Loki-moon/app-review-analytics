@@ -77,11 +77,38 @@ def compute_model_fit(df: pd.DataFrame, feature_cols: list[str]) -> dict[str, An
         ctrl_str = (" + " + " + ".join(active_ctrl)) if active_ctrl else ""
         formula = f"sentiment_binary ~ {feat_str}{ctrl_str}"
 
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                model = smf.logit(formula, data=reg_df).fit(disp=False, maxiter=200)
+        # Try multiple optimizers; perfect separation / ill-conditioning can
+        # make the default Newton solver fail for a specific app's feature set.
+        model = None
+        for _fit_kw in [
+            {"method": "newton", "maxiter": 500},
+            {"method": "lbfgs",  "maxiter": 500},
+            {"method": "bfgs",   "maxiter": 500},
+        ]:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    model = smf.logit(formula, data=reg_df).fit(disp=False, **_fit_kw)
+                break
+            except Exception:
+                continue
 
+        if model is None:
+            # Last resort: top-15 features by mention count (reduces rank-deficiency risk)
+            top_feats = sorted(valid_feats, key=lambda c: -int(reg_df[c].sum()))[:min(15, len(valid_feats))]
+            feat_str2 = " + ".join(top_feats)
+            formula2 = f"sentiment_binary ~ {feat_str2}{ctrl_str}"
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    model = smf.logit(formula2, data=reg_df).fit(disp=False, maxiter=500)
+            except Exception:
+                pass
+
+        if model is None:
+            continue
+
+        try:
             null_model = smf.logit("sentiment_binary ~ 1", data=reg_df).fit(disp=False, maxiter=200)
             pseudo_r2 = 1 - (model.llf / null_model.llf)
 
@@ -205,8 +232,8 @@ def compute_interaction_test(df: pd.DataFrame, feature_cols: list[str]) -> pd.Da
         .apply(lambda g: g.loc[g["lr_pvalue"].idxmin()])
         .reset_index(drop=True)
     )
-    # 전체 쌍 결과도 함께 반환 (UI에서 활용)
-    result.attrs["pairs_detail"] = result.copy()
+    # 전체 쌍 결과도 함께 반환 (UI에서 활용) — attrs는 반환되는 summary에 설정
+    summary.attrs["pairs_detail"] = result.copy()
     return summary
 
 
@@ -266,11 +293,13 @@ def compute_threshold_sensitivity(raw_df: pd.DataFrame, feature_cols: list[str])
             df["sentiment_binary"] = df["score"].apply(
                 lambda s: 1.0 if s >= POSITIVE_THRESHOLD else (0.0 if s <= NEGATIVE_THRESHOLD else float("nan"))
             )
-        else:
+        elif three_label == 1:
             df["sentiment_binary"] = df["score"].apply(
                 lambda s: 1.0 if (s >= POSITIVE_THRESHOLD or s == 3) else 0.0
-                if three_label == 1
-                else (0.0 if (s <= NEGATIVE_THRESHOLD or s == 3) else 1.0)
+            )
+        else:  # three_label == 0
+            df["sentiment_binary"] = df["score"].apply(
+                lambda s: 0.0 if (s <= NEGATIVE_THRESHOLD or s == 3) else 1.0
             )
 
         df = df.dropna(subset=["sentiment_binary"])

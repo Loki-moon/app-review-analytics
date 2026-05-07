@@ -292,13 +292,29 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
             key=lambda s: s.map(lambda x: _order.get(x, 999)),
         ).reset_index(drop=True)
 
-    cols = st.columns(len(table))
+    # 선택된 앱 중 table에 없는 앱은 placeholder 행 추가 (모형 수렴 실패한 경우)
+    selected_names = {a.app_name for a in _sel}
+    present_names  = set(table["app_name"].tolist())
+    missing_names  = selected_names - present_names
+    if missing_names:
+        _missing_ordered = [a.app_name for a in _sel if a.app_name in missing_names]
+        ph_rows = [
+            {"app_name": n, "pseudo_r2": float("nan"), "aic": float("nan"),
+             "bic": float("nan"), "log_likelihood": float("nan"), "n_obs": 0, "status": "fail"}
+            for n in _missing_ordered
+        ]
+        table = pd.concat([table, pd.DataFrame(ph_rows)], ignore_index=True)
+        # 순서 재정렬
+        if _order:
+            table = table.sort_values(
+                "app_name",
+                key=lambda s: s.map(lambda x: _order.get(x, 999)),
+            ).reset_index(drop=True)
+
+    cols = st.columns(max(1, len(table)))
     for i, (_, row) in enumerate(table.iterrows()):
         with cols[i]:
-            r2 = row.get("pseudo_r2", 0)
-            status = row.get("status", "warn")
-            r2_grade = "양호" if r2 >= 0.2 else ("주의" if r2 >= 0.1 else "경고")
-            grade_color = "#4FD6A5" if r2 >= 0.2 else ("#FBB55C" if r2 >= 0.1 else "#FF8A9A")
+            r2 = row.get("pseudo_r2", float("nan"))
 
             # 앱명을 게이지 상단에 별도 표시 (잘림 방지)
             st.markdown(
@@ -306,6 +322,34 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
                 f'color:{_TEXT};margin-bottom:4px;">{row["app_name"]}</div>',
                 unsafe_allow_html=True,
             )
+
+            if pd.isna(r2):
+                # 모형 수렴 실패 — placeholder 표시
+                st.markdown(
+                    f'<div style="height:200px;display:flex;flex-direction:column;'
+                    f'align-items:center;justify-content:center;background:{_GRID};'
+                    f'border-radius:8px;border:1px solid #FF8A9A;">'
+                    f'<span style="font-size:2rem;">❌</span>'
+                    f'<span style="color:#FF8A9A;font-size:0.85rem;margin-top:8px;">모형 수렴 실패</span>'
+                    f'<span style="color:{_SUBTEXT};font-size:0.75rem;margin-top:4px;">Pseudo R² 산출 불가</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(_badge_html("fail"), unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:{_SUBTEXT};line-height:1.6;'
+                    f'padding:6px 8px;background:{_GRID};border-radius:4px;margin-top:6px;">'
+                    f'전체 기능 모형 수렴 불가 — 개별 기능 OR은 정상 추정됨.<br>'
+                    f'리뷰 수를 늘리거나 기능 카테고리를 축소하면 개선됩니다.'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                continue
+
+            status = row.get("status", "warn")
+            r2_grade = "양호" if r2 >= 0.2 else ("주의" if r2 >= 0.1 else "경고")
+            grade_color = "#4FD6A5" if r2 >= 0.2 else ("#FBB55C" if r2 >= 0.1 else "#FF8A9A")
+
             fig_gauge = go.Figure(go.Indicator(
                 mode="gauge",
                 value=float(r2),
@@ -377,14 +421,15 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
 
-    # AIC/BIC 막대 비교
-    if len(table) > 1:
+    # AIC/BIC 막대 비교 — NaN(수렴 실패) 행 제외
+    valid_table = table.dropna(subset=["pseudo_r2"])
+    if len(valid_table) > 1:
         fig_aic = go.Figure()
         for metric, color in [("aic", "#4F8EF7"), ("bic", "#F7844F")]:
             fig_aic.add_trace(go.Bar(
                 name=metric.upper(),
-                x=table["app_name"].tolist(),
-                y=table[metric].tolist(),
+                x=valid_table["app_name"].tolist(),
+                y=valid_table[metric].tolist(),
                 marker_color=color,
                 hovertemplate=f"<b>%{{x}}</b><br>{metric.upper()}: %{{y:.1f}}<br>값이 낮을수록 모형이 간결해요<extra></extra>",
             ))
@@ -398,8 +443,8 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
         _chart_download_btn(fig_aic, "model_fit_aic_bic")
 
         # AIC/BIC 해석
-        best_aic_row = table.loc[table["aic"].idxmin()]
-        r2_vals = " / ".join(f"{r['app_name']} R²={r['pseudo_r2']:.3f}" for _, r in table.iterrows())
+        best_aic_row = valid_table.loc[valid_table["aic"].idxmin()]
+        r2_vals = " / ".join(f"{r['app_name']} R²={r['pseudo_r2']:.3f}" for _, r in valid_table.iterrows())
         _interp_box(
             "AIC / BIC 비교",
             f"모형 적합도: {r2_vals}. "
@@ -407,9 +452,9 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
             f"— AIC가 낮을수록 데이터를 군더더기 없이 잘 설명하는 모형입니다. "
             f"Pseudo R²가 0.1 이상이면 기능 키워드가 평점에 유의미한 영향을 주고 있다는 뜻입니다.",
         )
-    else:
-        # 단일 앱 게이지 해석
-        r2_val = table.iloc[0].get("pseudo_r2", 0)
+    elif len(valid_table) == 1:
+        # 단일 앱 또는 나머지가 1개만 수렴된 경우
+        r2_val = valid_table.iloc[0].get("pseudo_r2", 0)
         r2_grade = "우수" if r2_val >= 0.2 else ("양호" if r2_val >= 0.1 else "낮음")
         _interp_box(
             "모형 적합도 (Pseudo R²)",
@@ -428,12 +473,32 @@ def _render_model_fit(vr: dict[str, Any]) -> None:
         use_container_width=True,
     )
 
+    # 논문 기술용 박스 — 실제 수치로 채움
+    if not valid_table.empty:
+        _r2_str = " / ".join(
+            f"{r['app_name']} R²={r['pseudo_r2']:.3f}"
+            for _, r in valid_table.iterrows()
+        )
+        _aic_row = valid_table.loc[valid_table["aic"].idxmin()]
+        _bic_row = valid_table.loc[valid_table["bic"].idxmin()]
+        _aic_str = f"최솟값 {_aic_row['aic']:.1f} ({_aic_row['app_name']})"
+        _bic_str = f"최솟값 {_bic_row['bic']:.1f} ({_bic_row['app_name']})"
+        _fail_note = (
+            f" (※ {', '.join(sorted(missing_names))}은 전체 기능 결합 모형 수렴 실패로 산출 제외)"
+            if missing_names else ""
+        )
+    else:
+        _r2_str = "[수치]"
+        _aic_str = "[수치]"
+        _bic_str = "[수치]"
+        _fail_note = ""
+
     _thesis_box(
         "본 연구의 기능 키워드별 개별 로지스틱 회귀모형의 적합도를 McFadden Pseudo R²로 평가하였다. "
         "McFadden Pseudo R²은 절편만 포함한 귀무모형 대비 기능 키워드 포함 모형의 로그우도 개선 비율로 정의되며, "
         "사회과학 분야에서 0.2 이상이면 우수한 적합도로 간주된다(McFadden, 1974). "
-        "본 연구에서 분석 대상 서비스의 Pseudo R²는 <b>[수치]</b>로 산출되었으며, "
-        "AIC = <b>[수치]</b>, BIC = <b>[수치]</b>로 모형이 데이터를 경제적으로 설명함을 확인하였다. "
+        f"본 연구에서 분석 대상 서비스의 Pseudo R²는 <b>{_r2_str}</b>로 산출되었으며, "
+        f"AIC {_aic_str}, BIC {_bic_str}로 모형이 데이터를 경제적으로 설명함을 확인하였다{_fail_note}. "
         "이에 기능 키워드가 평점 이분화 결과를 유의미하게 예측한다고 판단하였다 (p &lt; 0.05)."
     )
 
@@ -1024,11 +1089,19 @@ def _render_threshold_sensitivity(vr: dict[str, Any]) -> None:
         st.markdown("**조건별 방향 일치 여부**")
         st.dataframe(pivot, use_container_width=True, height=280)
 
+    # 논문 기술용 박스 — 실제 수치로 채움
+    if not pivot.empty and "direction_consistent" in pivot.columns:
+        _ts_consistent = int(pivot["direction_consistent"].sum())
+        _ts_total      = len(pivot)
+        _ts_pct        = _ts_consistent / _ts_total * 100 if _ts_total > 0 else 0
+        _ts_n_str      = f"{_ts_pct:.0f}%(n={_ts_consistent}/{_ts_total})"
+    else:
+        _ts_n_str = "[수치]"
     _thesis_box(
         "평점 이분화 기준 선택의 강건성을 검토하기 위해, 3점 리뷰의 처리 방식을 "
         "(1) 3점 제외, (2) 3점을 긍정(≥3점 = 긍정)으로 포함, (3) 3점을 부정(&lt;4점 = 부정)으로 포함하는 "
         "세 가지 조건에서 각각 로지스틱 회귀를 수행하여 OR 방향의 일관성을 비교하였다. "
-        "분석 결과, 전체 기능 키워드 중 <b>[수치]</b>%(n=<b>[수치]</b>)에서 세 조건 모두 동일한 OR 방향이 유지되었으며, "
+        f"분석 결과, 전체 기능 키워드 중 <b>{_ts_n_str}</b>에서 세 조건 모두 동일한 OR 방향이 유지되었으며, "
         "이는 본 연구의 이분화 기준이 결과에 미치는 영향이 제한적임을 시사한다. "
         "OR 방향이 불일치한 기능 키워드에 대해서는 해석 시 이분화 기준의 영향을 명시적으로 언급하였다."
     )
@@ -1146,10 +1219,18 @@ def _render_period_stability(vr: dict[str, Any]) -> None:
 
     st.dataframe(pivot, use_container_width=True)
 
+    # 논문 기술용 박스 — 실제 수치로 채움
+    if not pivot.empty and "direction_consistent" in pivot.columns:
+        _ps_consistent = int(pivot["direction_consistent"].sum())
+        _ps_total      = len(pivot)
+        _ps_pct        = _ps_consistent / _ps_total * 100 if _ps_total > 0 else 0
+        _ps_n_str      = f"{_ps_pct:.0f}%(n={_ps_consistent}/{_ps_total})"
+    else:
+        _ps_n_str = "[수치]"
     _thesis_box(
         "분석 결과의 시간적 강건성(temporal robustness)을 검토하기 위해, 전체 수집 기간을 "
         "전체·상반기·하반기로 분할하여 각 기능 키워드의 OR 방향 일관성을 비교하였다. "
-        "분석 결과, 전체 기능 키워드 중 <b>[수치]</b>%(n=<b>[수치]</b>)에서 세 기간 모두 동일한 OR 방향이 유지되었으며, "
+        f"분석 결과, 전체 기능 키워드 중 <b>{_ps_n_str}</b>에서 세 기간 모두 동일한 OR 방향이 유지되었으며, "
         "이는 분석 결과가 특정 시기의 일시적 이벤트(예: 앱 업데이트, 서비스 장애)에 의해 "
         "크게 왜곡되지 않았음을 시사한다. "
         "OR 방향이 기간 간 불일치한 기능 키워드에 대해서는 해당 시기의 외부 요인을 검토하여 해석에 반영하였다."
