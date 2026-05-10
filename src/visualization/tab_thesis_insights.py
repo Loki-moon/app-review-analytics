@@ -107,7 +107,7 @@ def render_model_performance(vr: dict[str, Any], app_names: list[str]) -> None:
             verdict, vc = "주의 !", _RED
             interp = "리뷰 수가 충분히 증가하면 모형 설명력이 개선됩니다."
 
-        color = app_color(app)
+        color = app_color(app, app_names)
         cards_html += (
             f'<div style="background:#0E1116;border:1px solid {_BORDER};border-radius:6px;'
             f'padding:0.6rem 0.9rem;margin-bottom:0.5rem;">'
@@ -162,7 +162,7 @@ def render_competitive_diagnosis(
         strengths = sig_df[sig_df["OR"] >= _OR_POS_THRESH].nlargest(3, "OR")
         weaknesses = sig_df[sig_df["OR"] < _OR_POS_THRESH].nsmallest(3, "OR")
 
-        color = app_color(app)
+        color = app_color(app, app_names)
 
         str_rows = ""
         for _, r in strengths.iterrows():
@@ -258,6 +258,8 @@ def render_priority_action_plan(
 
         delta_str = (f"+{delta:.2f}" if delta > 0 else f"{delta:.2f}") if not pd.isna(delta) else "—"
         delta_color = _GREEN if (not pd.isna(delta) and delta > 0) else _RED
+        or_str = f"{or_val:.2f}" if not pd.isna(or_val) else "—"
+        or_color = "#4FD6A5" if (not pd.isna(or_val) and or_val >= 1) else _RED
 
         rows_html += (
             f'<div style="display:grid;grid-template-columns:28px 1fr 60px 55px 70px 90px;'
@@ -266,8 +268,8 @@ def render_priority_action_plan(
             f'<div style="color:{_MUTED};text-align:center;">{rank}</div>'
             f'<div style="color:{_TEXT};">{r["feature_category"]}</div>'
             f'<div style="color:#93C5FD;font-weight:700;text-align:right;">{ps:.2f}</div>'
-            f'<div style="color:{"#4FD6A5" if (not pd.isna(or_val) and or_val >= 1) else _RED};'
-            f'font-weight:700;text-align:right;">{or_val:.2f if not pd.isna(or_val) else "—"}</div>'
+            f'<div style="color:{or_color};'
+            f'font-weight:700;text-align:right;">{or_str}</div>'
             f'<div style="color:{delta_color};font-weight:700;text-align:right;">{delta_str}</div>'
             f'<div style="text-align:center;">'
             f'<span style="background:{action_color}22;color:{action_color};border:1px solid {action_color}55;'
